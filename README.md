@@ -7,7 +7,7 @@
 - Tesseract 中文/英文 OCR 提取 `A 通过 B 不通过 P 通过` 等明确文字；缺失、冲突及未识别结果保留为待确认。仅有图形标记或复杂表格的照片可能需要手动校对。
 - 查看原图、修改条形码、增删检测项、修改通过/不通过/待确认。
 - 导出真实 XLSX，含照片缩略图、条形码文本（保留前导零）、动态检测项列、校对状态及 OCR 原文工作表。
-- 模型随站点托管，首次使用需要下载约 30 MB 语言模型及识别核心。语言模型通过浏览器缓存复用；不是离线安装包。
+- 模型随站点托管，首次使用需要下载约 4 MB 语言模型及识别核心。语言模型通过浏览器缓存复用；不是离线安装包。
 
 ## 开发
 
@@ -19,7 +19,7 @@ npm run dev
 npm run build
 ```
 
-`public/ocr` 包含 Tesseract.js 6.0.1 worker、同版本依赖的核心文件，以及 naptha/tessdata 4.0.0 中文/英文语言数据。来源：
+`public/ocr` 包含 Tesseract.js 6.0.1 worker、同版本依赖的核心文件，以及 naptha/tessdata 4.0.0_best_int 中文/英文语言数据。来源：
 - https://github.com/naptha/tesseract.js
 - https://github.com/naptha/tessdata
 - https://github.com/zxing-js/browser
