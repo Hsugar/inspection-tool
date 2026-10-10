@@ -38,3 +38,7 @@ next-env.d.ts
 /work/
 /.test-build/
 /test-output/
+
+/dist-mobile/
+/releases/
+/signing/

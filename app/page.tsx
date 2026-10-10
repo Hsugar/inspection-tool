@@ -1,74 +1,894 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { ScanLine, Upload, FileSpreadsheet, Images, ShieldCheck, ArrowRight, ScanBarcode, Pencil, RotateCcw, Trash2, Plus, LoaderCircle, Maximize2, CircleAlert, CheckCheck } from 'lucide-react';
+import {
+  ScanLine,
+  Upload,
+  FileSpreadsheet,
+  Images,
+  ShieldCheck,
+  LoaderCircle,
+  ScanBarcode,
+  RotateCcw,
+  Trash2,
+  Pencil,
+  CheckCheck,
+  Copy,
+  MousePointer2,
+  TriangleAlert,
+  Clock3,
+  CircleHelp,
+  Share2,
+  Camera,
+} from 'lucide-react';
 import { Empty, EmptyTitle, EmptyDescription } from '@/components/ui/empty';
 import { Progress } from '@/components/ui/progress';
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
-import { labels, needsReview, validateChecks, type Inspection, type Check, type Verdict } from '@/lib/inspection';
-import { prepareImage, recognize } from '@/lib/recognition';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  AnalysisImage,
+  type Layer,
+} from '@/components/inspection/analysis-image';
+import {
+  conclude,
+  needsReview,
+  emptyDevice,
+  setManualLampState,
+  stateLabels,
+  colorLabels,
+  type Inspection,
+} from '@/lib/inspection';
+import { type Box, type LampState, type LampColor } from '@/lib/device-vision';
+import { prepareImage, recognize, analyzeManualBody } from '@/lib/recognition';
 import { exportExcel } from '@/lib/export';
+import { isAndroid, pickAndroidPhotos, takeAndroidPhoto } from '@/lib/native';
+import { CameraDialog } from '@/components/inspection/camera-dialog';
+import { loadRecords, saveRecord, deleteRecord } from '@/lib/record-store';
+import { exportAndroidExcel } from '@/lib/mobile-export';
 
 export default function Home() {
-  const [records,setRecords]=useState<Inspection[]>([]);
-  const [busy,setBusy]=useState(false),[exporting,setExporting]=useState(false),[drag,setDrag]=useState(false);
-  const [notice,setNotice]=useState(''),[progress,setProgress]=useState(0),[message,setMessage]=useState('');
-  const [edit,setEdit]=useState<Inspection|null>(null),[preview,setPreview]=useState<Inspection|null>(null),[editError,setEditError]=useState('');
-  const input=useRef<HTMLInputElement>(null),busyRef=useRef(false),recordsRef=useRef(records),urls=useRef(new Set<string>());
-  recordsRef.current=records;
-  const patch=(id:string,update:Partial<Inspection>)=>setRecords(current=>current.map(r=>r.id===id?{...r,...update}:r));
-  useEffect(()=>()=>{urls.current.forEach(url=>URL.revokeObjectURL(url));},[]);
-  useEffect(()=>{const onLeave=(event:BeforeUnloadEvent)=>{if(recordsRef.current.length){event.preventDefault();event.returnValue='';}};window.addEventListener('beforeunload',onLeave);return()=>window.removeEventListener('beforeunload',onLeave);},[]);
-  useEffect(()=>{
-    const context=(document as Document & {modelContext?:{registerTool:(tool:unknown,options:{signal:AbortSignal})=>void|Promise<void>}}).modelContext;
-    if(!context)return;const controller=new AbortController();
-    Promise.resolve(context.registerTool({name:'read_inspection_results',title:'读取图片检测结果',description:'读取当前页面的条形码、检测项和校对状态，不含照片。',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:(input:unknown)=>{if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new Error('参数必须为空对象');return recordsRef.current.map(({id,name,barcode,checks,reviewed,phase})=>({id,name,barcode,checks,reviewed,phase}));}},{signal:controller.signal})).catch(()=>{});
-    return()=>controller.abort();
-  },[]);
-  async function process(items:Inspection[]) {
-    for(const [index,item] of items.entries()){
-      patch(item.id,{phase:'reading'});setProgress(0);setMessage(`第 ${index+1} / ${items.length} 张 · 正在读取条形码`);
-      try {const result=await recognize(item.image,(value,text)=>{setProgress(value);setMessage(`第 ${index+1} / ${items.length} 张 · ${text}`);});patch(item.id,{...result,phase:result.error?'error':'done',reviewed:false});}
-      catch(e){patch(item.id,{phase:'error',error:e instanceof Error?e.message:'识别失败，可手动校对。'});}
+  const [records, setRecords] = useState<Inspection[]>([]),
+    [activeId, setActiveId] = useState(''),
+    [ready, setReady] = useState(false),
+    [picking, setPicking] = useState(false),
+    [cameraOpen, setCameraOpen] = useState(false),
+    [storageError, setStorageError] = useState(''),
+    [busy, setBusy] = useState(false),
+    [exporting, setExporting] = useState(false),
+    [notice, setNotice] = useState(''),
+    [progress, setProgress] = useState(0),
+    [message, setMessage] = useState(''),
+    [drag, setDrag] = useState(false),
+    [layer, setLayer] = useState<Layer>('all'),
+    [selecting, setSelecting] = useState(false),
+    [edit, setEdit] = useState<Inspection | null>(null);
+  const input = useRef<HTMLInputElement>(null),
+    busyRef = useRef(false),
+    recordRef = useRef(records),
+    urls = useRef(new Set<string>());
+
+  const active = records.find((r) => r.id === activeId) || records[0];
+  const result = active ? conclude(active.device) : null;
+  function updateRecords(next: Inspection[]) {
+    recordRef.current = next;
+    setRecords(next);
+  }
+  async function patch(id: string, update: Partial<Inspection>) {
+    const current = recordRef.current.find((r) => r.id === id);
+    if (!current) return;
+    const next = { ...current, ...update };
+    await saveRecord(next);
+    updateRecords(recordRef.current.map((r) => (r.id === id ? next : r)));
+  }
+  useEffect(() => {
+    let cancelled = false;
+    loadRecords()
+      .then(({ records: saved, warnings }) => {
+        if (cancelled) {
+          saved.forEach((r) => URL.revokeObjectURL(r.image));
+          return;
+        }
+        saved.forEach((r) => urls.current.add(r.image));
+        updateRecords(saved);
+        setNotice(warnings.join('\n'));
+        setReady(true);
+      })
+      .catch(() =>
+        setStorageError(
+          '无法读取本地记录，请重新打开应用。原始文件仍保留，暂时不能添加新照片。',
+        ),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(
+    () => () => {
+      urls.current.forEach((url) => URL.revokeObjectURL(url));
+    },
+    [],
+  );
+  useEffect(() => {
+    const context = (
+      document as Document & {
+        modelContext?: {
+          registerTool: (
+            tool: unknown,
+            options: { signal: AbortSignal },
+          ) => void | Promise<void>;
+        };
+      }
+    ).modelContext;
+    if (!context) return;
+    const c = new AbortController();
+    try {
+      Promise.resolve(
+        context.registerTool(
+          {
+            name: 'read_inspection_results',
+            description: '读取当前照片的条形码、四路设备灯态和校对状态。',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              additionalProperties: false,
+            },
+            annotations: { readOnlyHint: true, untrustedContentHint: true },
+            execute: (value: unknown) => {
+              if (
+                !value ||
+                typeof value !== 'object' ||
+                Array.isArray(value) ||
+                Object.keys(value).length
+              )
+                throw new Error('参数必须为空对象');
+              return recordRef.current.map((r) => ({
+                id: r.id,
+                name: r.name,
+                barcode: r.barcode,
+                lamps: r.device.lamps.map((l) => ({
+                  key: l.key,
+                  state: l.state,
+                  color: l.color,
+                })),
+                conclusion: conclude(r.device),
+                reviewed: r.reviewed,
+              }));
+            },
+          },
+          { signal: c.signal },
+        ),
+      ).catch(() => {});
+    } catch {}
+    return () => c.abort();
+  }, []);
+  async function process(items: Inspection[]) {
+    for (const [index, r] of items.entries()) {
+      await patch(r.id, { phase: 'reading' });
+      try {
+        const output = await recognize(r.image, (v, t) => {
+          setProgress(v);
+          setMessage(`第 ${index + 1} / ${items.length} 张 · ${t}`);
+        });
+        await patch(r.id, { ...output, phase: 'done', reviewed: false });
+      } catch (e) {
+        await patch(r.id, {
+          phase: 'error',
+          error:
+            e instanceof Error ? e.message : '分析失败，请重试或人工校对。',
+        });
+      }
     }
   }
-  async function upload(files:FileList|File[]) {
-    if(busyRef.current)return;busyRef.current=true;setBusy(true);setNotice('');
-    const errors:string[]=[];const batch:Inspection[]=[];
+  async function upload(files: FileList | File[]) {
+    if (!ready || busyRef.current || exporting) return;
+    busyRef.current = true;
+    setBusy(true);
+    setNotice('');
+    const batch: Inspection[] = [],
+      errors: string[] = [];
     try {
-      const room=30-recordsRef.current.length;const incoming=Array.from(files);
-      if(incoming.length>room)errors.push(`最多保留 30 张，本次只接收前 ${Math.max(room,0)} 张。`);
-      for(const file of incoming.slice(0,Math.max(0,room))){
-        if(!['image/jpeg','image/png','image/webp'].includes(file.type)){errors.push(`${file.name}：仅支持 JPG、PNG、WebP。`);continue;}
-        if(file.size>20*1024*1024){errors.push(`${file.name}：超过 20 MB。`);continue;}
-        try{const media=await prepareImage(file);urls.current.add(media.image);batch.push({id:crypto.randomUUID(),name:file.name,...media,barcode:'',format:'',checks:['A','B','P'].map(name=>({name,verdict:'unknown'})),rawText:'',phase:'queued',error:'',reviewed:false,createdAt:new Date().toLocaleString('zh-CN',{hour12:false})});}catch(e){errors.push(`${file.name}：${e instanceof Error?e.message:'无法读取'}`);}
+      const incoming = Array.from(files),
+        room = 30 - recordRef.current.length;
+      if (incoming.length > room)
+        errors.push(`当前最多保留 30 张，仅接收前 ${Math.max(0, room)} 张。`);
+      for (const file of incoming.slice(0, Math.max(0, room))) {
+        if (
+          !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) ||
+          file.size > 20 * 1024 * 1024
+        ) {
+          errors.push(`${file.name}：请使用 20 MB 以内的 JPG、PNG 或 WebP。`);
+          continue;
+        }
+        try {
+          const media = await prepareImage(file);
+          urls.current.add(media.image);
+          const record: Inspection = {
+            id: crypto.randomUUID(),
+            name: file.name,
+            ...media,
+            barcode: '',
+            format: '',
+            barcodeBox: null,
+            barcodeSource: 'unread',
+            device: emptyDevice(),
+            rotation: 0,
+            elapsedMs: 0,
+            phase: 'queued',
+            error: '',
+            reviewed: false,
+            createdAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+            createdTimestamp: Date.now(),
+          };
+          try {
+            await saveRecord(record);
+          } catch {
+            URL.revokeObjectURL(record.image);
+            throw new Error('本地保存失败，请检查手机剩余空间');
+          }
+          batch.push(record);
+        } catch (e) {
+          errors.push(
+            `${file.name}：${e instanceof Error ? e.message : '无法读取'}`,
+          );
+        }
       }
-      setRecords(current=>[...current,...batch]);setNotice(errors.join('\n'));await process(batch);
-    }finally{busyRef.current=false;setBusy(false);setMessage('');}
+      updateRecords([...recordRef.current, ...batch]);
+      if (batch.length) {
+        setActiveId(batch[0].id);
+        setSelecting(false);
+      }
+      setNotice(errors.join('\n'));
+      await process(batch);
+    } catch {
+      setNotice('处理或本地保存失败，请检查剩余空间后重试。');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      setMessage('');
+    }
   }
-  async function retry(record:Inspection){if(busyRef.current)return;busyRef.current=true;setBusy(true);try{await process([record]);}finally{busyRef.current=false;setBusy(false);setMessage('');}}
-  function remove(record:Inspection){setRecords(current=>current.filter(r=>r.id!==record.id));URL.revokeObjectURL(record.image);urls.current.delete(record.image);}
-  async function download(){setExporting(true);setNotice('');try{await exportExcel(records);}catch{setNotice('Excel 导出失败，请重试。照片仍保留在当前页面。');}finally{setExporting(false);}}
-  function saveEdit(){if(!edit)return;const error=validateChecks(edit.checks);if(error){setEditError(error);return;}patch(edit.id,{barcode:edit.barcode.trim(),format:edit.format,checks:edit.checks.map(c=>({...c,name:c.name.trim().toUpperCase()})),reviewed:true});setEdit(null);}
-  function changeCheck(index:number,update:Partial<Check>){setEdit(value=>value?{...value,checks:value.checks.map((c,i)=>i===index?{...c,...update}:c)}:value);}
-  const pending=records.filter(needsReview).length;
-  return <div className="app-shell"><header className="topbar"><a href="/" className="brand"><span className="brand-icon"><ScanLine size={23}/></span>检图<span className="brand-divider"/>图片检测工作台</a><span className="local-badge"><ShieldCheck size={16}/>本机处理 · 照片不上传云端</span></header><main>
-    <div className="heading"><div><div className="eyebrow">INSPECTION WORKSPACE</div><h1>让每一张检测照片，<br className="mobile-break"/>都有清晰的结果。</h1><p>上传照片，提取条形码与检测信息，一键整理为 Excel。</p></div><button className="button secondary" onClick={download} disabled={!records.length||busy||exporting}>{exporting?<LoaderCircle className="spin" size={18}/>:<FileSpreadsheet size={18}/>} {exporting?'正在生成…':`导出 Excel${records.length?`（${records.length}）`:''}`}</button></div>
-    <section className={`upload-zone ${drag?'dragging':''} ${records.length?'compact':''}`} onDragOver={event=>{event.preventDefault();if(!busy)setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={event=>{event.preventDefault();setDrag(false);void upload(event.dataTransfer.files);}} aria-label="图片上传区">
-      <span className="upload-icon"><Upload size={26}/></span><div className="upload-copy"><h2>{busy?'正在处理检测照片':'把检测照片拖到这里'}</h2><p>支持 JPG、PNG、WebP，可一次选择多张照片</p></div><div className="upload-action"><button className="button primary" disabled={busy||exporting||records.length>=30} onClick={()=>input.current?.click()}>{busy?<LoaderCircle className="spin" size={17}/>:null}{records.length?'继续添加照片':'选择照片'} {!busy&&<ArrowRight size={17}/>}</button><span className="small-note">单张不超过 20 MB · 最多 30 张</span></div><input ref={input} type="file" accept="image/jpeg,image/png,image/webp" multiple className="sr-only" aria-label="选择检测照片" onChange={event=>{if(event.target.files)void upload(event.target.files);event.target.value='';}}/>
-    </section>
-    {busy&&<div className="processing" role="status"><span><LoaderCircle size={16} className="spin"/>{message||'正在读取照片…'}</span><Progress value={progress} aria-label="当前照片文字识别进度"/></div>}
-    {notice&&<div className="notice" role="alert"><CircleAlert size={18}/><span>{notice}</span></div>}
-    <div className="section-heading"><h2>检测结果 <span className="count">{records.length}</span></h2><span>{records.length?<>{records.length-pending} 张已校对 <span className="dot-separator">/</span> <span className="amber">{pending} 张待确认</span></>:'照片与结果，一一对应'}</span></div>
-    {!records.length?<section className="results-empty"><Empty><Images size={35} strokeWidth={1.4}/><EmptyTitle className="text-base">等待第一张检测照片</EmptyTitle><EmptyDescription>上传后，这里会显示原图、条形码和每个检测项的结果。</EmptyDescription></Empty></section>:<div className="results-grid">{records.map((record,index)=><article className="result-card" key={record.id}>
-      <div className="card-top"><span className="photo-number">PHOTO {String(index+1).padStart(2,'0')}</span><span className={`review-badge ${needsReview(record)?'pending':'reviewed'}`}>{record.phase==='queued'?'等待识别':record.phase==='reading'?'识别中':needsReview(record)?'待确认':'已校对'}</span></div>
-      <button className="photo-preview" onClick={()=>setPreview(record)} aria-label={`放大查看 ${record.name}`}><img src={record.image} alt={`检测照片：${record.name}`}/><span className="zoom-label"><Maximize2 size={14}/>查看原图</span></button>
-      <div className="card-body"><div className="file-name" title={record.name}>{record.name}</div><div className="barcode-box"><ScanBarcode size={23}/><div><span className="field-label">条形码 {record.format&&<span>· {record.format}</span>}</span><strong className={!record.barcode?'missing':''}>{record.barcode||'未识别，请校对录入'}</strong></div></div><div className="checks">{record.checks.map((check,i)=><div className="check-row" key={`${check.name}-${i}`}><span className="check-name">{check.name}</span><span className={`verdict ${check.verdict}`}>{labels[check.verdict]}</span></div>)}</div>
-      {record.error&&<p className="card-error">文字识别未完成，可重试或手动录入。</p>}
-      <div className="card-actions"><button className="edit-button" disabled={busy||exporting} onClick={()=>{setEdit({...record,checks:record.checks.map(c=>({...c}))});setEditError('');}}><Pencil size={14}/>校对结果</button><div><button className="icon-button" aria-label={`重新识别 ${record.name}`} title="重新识别（会替换校对结果）" disabled={busy||exporting||record.reviewed} onClick={()=>void retry(record)}><RotateCcw size={16}/></button><button className="icon-button" aria-label={`移除 ${record.name}`} title="移除此照片" disabled={busy||exporting} onClick={()=>remove(record)}><Trash2 size={16}/></button></div></div></div>
-    </article>)}</div>}
-    <footer><span>✅ 通过 <i/> ❌ 不通过 <i/> <span className="amber">待确认</span></span><span>仅保留在当前页面，请在关闭前导出。识别后请核对原图。</span></footer>
-    <Dialog open={!!preview} onOpenChange={open=>{if(!open)setPreview(null);}}><DialogContent className="image-dialog"><DialogTitle>{preview?.name}</DialogTitle><DialogDescription>原图预览 · 可在校对结果中修改条形码和检测项。</DialogDescription>{preview&&<img src={preview.image} alt={preview.name}/>}</DialogContent></Dialog>
-    <Dialog open={!!edit} onOpenChange={open=>{if(!open)setEdit(null);}}><DialogContent className="edit-dialog"><DialogTitle>校对检测结果</DialogTitle><DialogDescription>对照原图核对条形码和检测项，无法确认的内容请保留“待确认”。</DialogDescription>{edit&&<><div className="edit-layout"><a className="edit-photo" href={edit.image} target="_blank" rel="noreferrer" title="在新标签页查看原图"><img src={edit.image} alt={edit.name}/><span>点击查看完整原图 ↗</span></a><div className="edit-fields"><label className="form-label" htmlFor="barcode">条形码</label><input id="barcode" className="text-input mono" value={edit.barcode} placeholder="输入原图上的条形码" onChange={e=>setEdit({...edit,barcode:e.target.value,format:e.target.value===edit.barcode?edit.format:'手动录入'})}/><div className="edit-section-title">检测项</div>{edit.checks.map((check,index)=><div className="edit-check" key={index}><input className="text-input" aria-label={`检测项 ${index+1} 名称`} maxLength={30} value={check.name} onChange={e=>changeCheck(index,{name:e.target.value})}/><Select value={check.verdict} onValueChange={value=>{if(value)changeCheck(index,{verdict:value as Verdict});}}><SelectTrigger aria-label={`${check.name} 检测结果`} className="verdict-select"><SelectValue>{labels[check.verdict]}</SelectValue></SelectTrigger><SelectContent>{Object.entries(labels).map(([value,label])=><SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><button className="icon-button" aria-label={`删除检测项 ${check.name}`} onClick={()=>setEdit({...edit,checks:edit.checks.filter((_,i)=>i!==index)})}><Trash2 size={16}/></button></div>)}<button className="edit-button add-check" onClick={()=>setEdit({...edit,checks:[...edit.checks,{name:'',verdict:'unknown'}]})}><Plus size={15}/>添加检测项</button><details className="raw-text"><summary>查看识别原文</summary><pre>{edit.rawText||'未识别到文字，可手动补充结果。'}</pre></details></div></div>{editError&&<p className="card-error" role="alert">{editError}</p>}<div className="dialog-actions"><button className="button secondary" onClick={()=>setEdit(null)}>取消</button><button className="button primary" onClick={saveEdit}><CheckCheck size={17}/>保存校对</button></div></>}</DialogContent></Dialog>
-  </main></div>;
+  async function retry(r: Inspection) {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setSelecting(false);
+    try {
+      await process([r]);
+    } catch {
+      setNotice('处理或本地保存失败，请检查剩余空间后重试。');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      setMessage('');
+    }
+  }
+  async function selectBody(box: Box) {
+    if (!active || busyRef.current) return;
+    setSelecting(false);
+    busyRef.current = true;
+    setBusy(true);
+    setMessage('按框选机身重新分析四路灯态');
+    const id = active.id;
+    try {
+      const device = await analyzeManualBody(
+        active.displayImage,
+        box,
+        active.imageWidth,
+        active.imageHeight,
+      );
+      await patch(id, { device, reviewed: false });
+    } catch {
+      setNotice('框选分析失败，请重试。');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
+  async function download(action: 'save' | 'share' = 'save') {
+    setExporting(true);
+    setNotice('');
+    try {
+      if (isAndroid()) setNotice(await exportAndroidExcel(records, action));
+      else await exportExcel(records);
+    } catch {
+      setNotice('Excel 导出失败，请重试。');
+    } finally {
+      setExporting(false);
+    }
+  }
+  async function remove(r: Inspection) {
+    try {
+      await deleteRecord(r.id);
+    } catch {
+      setNotice('本地记录删除失败，请重试。');
+      return;
+    }
+    updateRecords(recordRef.current.filter((x) => x.id !== r.id));
+    urls.current.delete(r.image);
+    URL.revokeObjectURL(r.image);
+    setSelecting(false);
+  }
+  async function saveEdit() {
+    if (!edit) return;
+    try {
+      await patch(edit.id, {
+        barcode: edit.barcode.trim(),
+        barcodeSource: edit.barcodeSource,
+        device: edit.device,
+        reviewed: true,
+      });
+      setEdit(null);
+    } catch {
+      setNotice('校对结果未能保存，请检查剩余空间后重试。');
+    }
+  }
+  async function choosePhotos() {
+    if (!isAndroid()) {
+      input.current?.click();
+      return;
+    }
+    if (!ready || busyRef.current || exporting) return;
+    busyRef.current = true;
+    setPicking(true);
+    try {
+      const files = await pickAndroidPhotos();
+      busyRef.current = false;
+      if (files.length) await upload(files);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '选图失败，请重试。');
+    } finally {
+      busyRef.current = false;
+      setPicking(false);
+    }
+  }
+  async function takePhoto() {
+    if (
+      !ready ||
+      busyRef.current ||
+      picking ||
+      exporting ||
+      records.length >= 30
+    )
+      return;
+    setNotice('');
+    if (!isAndroid()) {
+      setCameraOpen(true);
+      return;
+    }
+    busyRef.current = true;
+    setPicking(true);
+    try {
+      const files = await takeAndroidPhoto();
+      busyRef.current = false;
+      if (files.length) await upload(files);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '拍照失败，请重试。');
+    } finally {
+      busyRef.current = false;
+      setPicking(false);
+    }
+  }
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-icon">
+            <ScanLine size={23} />
+          </span>
+          检图 <span className="brand-divider" />
+          设备灯态检测
+        </div>
+        <span className="local-badge">
+          <ShieldCheck size={16} />
+          照片在本机分析
+        </span>
+      </header>
+      <main>
+        <div className="heading">
+          <div>
+            <div className="eyebrow">DEVICE INSPECTION</div>
+            <h1>看清设备灯态，记录检测结果</h1>
+            <p>识别试管条码、机身与四路指示灯，支持逐张校对和 Excel 导出。</p>
+          </div>
+          <div className="export-actions">
+            <button
+              className="button primary"
+              disabled={!ready || !records.length || busy || exporting}
+              onClick={() => void download()}
+            >
+              {exporting ? (
+                <LoaderCircle size={18} className="spin" />
+              ) : (
+                <FileSpreadsheet size={18} />
+              )}
+              {isAndroid() ? '保存 Excel' : '导出 Excel'}{' '}
+              {records.length ? `(${records.length})` : ''}
+            </button>
+            {isAndroid() && (
+              <button
+                className="button secondary"
+                disabled={!ready || !records.length || busy || exporting}
+                onClick={() => void download('share')}
+              >
+                <Share2 size={18} />
+                分享 Excel
+              </button>
+            )}
+          </div>
+        </div>
+        <section
+          className={`upload-zone ${drag ? 'dragging' : ''} ${records.length ? 'compact' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!busy) setDrag(true);
+          }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDrag(false);
+            void upload(e.dataTransfer.files);
+          }}
+        >
+          <span className="upload-icon">
+            <Upload size={24} />
+          </span>
+          <div>
+            <h2>{busy ? '正在分析照片' : '添加设备照片'}</h2>
+            <p>拍清完整机身、四个指示灯和试管条码 · JPG / PNG / WebP</p>
+          </div>
+          <button
+            className="button secondary"
+            disabled={
+              !ready || busy || picking || exporting || records.length >= 30
+            }
+            onClick={() => void choosePhotos()}
+          >
+            选择照片
+          </button>
+          <button
+            className="button primary"
+            disabled={
+              !ready || busy || picking || exporting || records.length >= 30
+            }
+            onClick={() => void takePhoto()}
+          >
+            <Camera size={18} />
+            拍照
+          </button>
+          <input
+            className="sr-only"
+            ref={input}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            multiple
+            aria-label="选择设备照片"
+            onChange={(e) => {
+              if (e.target.files) void upload(e.target.files);
+              e.target.value = '';
+            }}
+          />
+          <span className="upload-limit">最多 30 张 · 单张 20 MB</span>
+        </section>
+        <div className="storage-status" role="status">
+          {storageError ||
+            (!ready
+              ? '正在恢复本地记录…'
+              : busy
+                ? '照片与结果将逐张保存到本机'
+                : `已保存到本机 · ${records.length} 条记录`)}
+        </div>
+        {busy && (
+          <div className="processing" role="status">
+            <span>
+              <LoaderCircle size={16} className="spin" />
+              {message || '正在读取图片'}
+            </span>
+            <Progress value={progress} aria-label="照片处理进度" />
+          </div>
+        )}
+        {notice && (
+          <div className="notice" role="alert">
+            {notice}
+          </div>
+        )}
+        {!active ? (
+          <section className="results-empty">
+            <Empty>
+              <Images size={38} />
+              <EmptyTitle className="text-lg">等待第一张设备照片</EmptyTitle>
+              <EmptyDescription>
+                上传后先查看照片上的定位框，再核对 Negative、Positive、Invalid
+                与 Power 四路灯态。
+              </EmptyDescription>
+            </Empty>
+            <p>当前适配样例中的蓝盖四灯设备，其他型号需单独校准。</p>
+          </section>
+        ) : (
+          <>
+            <div className="batch-heading">
+              <h2>
+                本地照片 <span>{records.length}</span>
+              </h2>
+              <span>
+                {records.filter((r) => !needsReview(r)).length} 张已校对
+              </span>
+            </div>
+            <div className="photo-strip" aria-label="切换照片">
+              {records.map((r, index) => (
+                <button
+                  key={r.id}
+                  className={`photo-item ${r.id === active.id ? 'active' : ''}`}
+                  onClick={() => {
+                    setActiveId(r.id);
+                    setSelecting(false);
+                  }}
+                >
+                  <img src={r.thumbnail} alt="" />
+                  <span>
+                    <strong>
+                      {String(index + 1).padStart(2, '0')} · {r.name}
+                    </strong>
+                    <small>
+                      {r.phase === 'reading'
+                        ? '分析中…'
+                        : r.phase === 'queued'
+                          ? '等待分析'
+                          : conclude(r.device).title}
+                    </small>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="inspection-workspace">
+              <section className="visual-panel">
+                <div className="panel-title">
+                  <h2>识别过程</h2>
+                  <span>
+                    {(active.device.body ? 1 : 0) +
+                      (active.barcodeBox ? 1 : 0) +
+                      active.device.lamps.filter((l) => l.box.width > 0)
+                        .length}{' '}
+                    个定位区域
+                  </span>
+                </div>
+                <Tabs
+                  value={layer}
+                  onValueChange={(value) => setLayer(value as Layer)}
+                >
+                  <TabsList className="layer-tabs" aria-label="显示图层">
+                    {[
+                      ['all', '全部目标'],
+                      ['lamps', '四路灯位'],
+                      ['body', '机身'],
+                      ['barcode', '条码'],
+                      ['none', '原图'],
+                    ].map(([value, label]) => (
+                      <TabsTrigger value={value} key={value}>
+                        {label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+                <div className="image-stage">
+                  <AnalysisImage
+                    record={active}
+                    layer={layer}
+                    selecting={selecting}
+                    onSelect={(box) => void selectBody(box)}
+                  />
+                </div>
+                <div className="image-controls">
+                  <button
+                    className={`button small ${selecting ? 'primary' : 'secondary'}`}
+                    disabled={busy || !active.imageWidth}
+                    onClick={() => {
+                      setSelecting((v) => !v);
+                      setLayer('all');
+                    }}
+                  >
+                    <MousePointer2 size={15} />
+                    {selecting ? '取消框选' : '框选机身重新分析'}
+                  </button>
+                  <a href={active.image} target="_blank" rel="noreferrer">
+                    查看上传原图 ↗
+                  </a>
+                </div>
+                <p className="panel-note">
+                  {selecting
+                    ? '从机身左上角拖到右下角，包含全部四个灯位，不含试管和电缆。'
+                    : '青色：机身 · 紫色：条码 · 红 / 黄：亮起灯位 · 灰色：未见亮起'}
+                </p>
+              </section>
+              <section className="report-panel">
+                <div className={`conclusion ${result!.tone}`}>
+                  <div className="conclusion-icon">
+                    {result!.code === 'unknown' ? (
+                      <CircleHelp />
+                    ) : (
+                      <TriangleAlert />
+                    )}
+                  </div>
+                  <div>
+                    <span>综合指示汇总</span>
+                    <h2>{result!.title}</h2>
+                  </div>
+                  <span className="review-badge">
+                    {active.reviewed ? '已人工校对' : '待人工校对'}
+                  </span>
+                </div>
+                <div className="local-processing">
+                  <ShieldCheck size={23} />
+                  <div>
+                    <strong>本地光学分析</strong>
+                    <p>机身定位 + 四路灯位测量 + 条码解码</p>
+                  </div>
+                  <span>
+                    <Clock3 size={15} />
+                    {active.elapsedMs ? `${active.elapsedMs} ms` : '—'}
+                  </span>
+                </div>
+                <div className="barcode-row">
+                  <ScanBarcode size={25} />
+                  <div>
+                    <span>试管条形码编号</span>
+                    <strong>{active.barcode || '未识别，请校对录入'}</strong>
+                    <small>
+                      {active.barcodeSource === 'decoded'
+                        ? `${active.format} · 从条码图案解码`
+                        : active.barcodeSource === 'manual'
+                          ? '人工录入'
+                          : '待确认'}
+                    </small>
+                  </div>
+                  <button
+                    className="icon-button"
+                    aria-label="复制条形码"
+                    disabled={!active.barcode}
+                    onClick={() =>
+                      navigator.clipboard
+                        .writeText(active.barcode)
+                        .then(() => setNotice('条形码已复制。'))
+                        .catch(() =>
+                          setNotice(
+                            '无法自动复制，请在校对窗口选中条形码复制。',
+                          ),
+                        )
+                    }
+                  >
+                    <Copy size={18} />
+                  </button>
+                </div>
+                <div className="lamp-heading">
+                  <h2>四路指示灯</h2>
+                  <span>亮起 / 未见亮起</span>
+                </div>
+                <div className="lamp-grid">
+                  {active.device.lamps.map((l) => (
+                    <div
+                      key={l.key}
+                      className={`lamp-card ${l.state === 'on' ? 'lit ' + l.color : ''}`}
+                    >
+                      <div>
+                        <h3>{l.key === 'power' ? 'Power（电源）' : l.label}</h3>
+                        <span
+                          className={`lamp-dot ${l.state === 'on' ? l.color : ''}`}
+                        />
+                      </div>
+                      <strong>
+                        {l.state === 'on' ? '●' : l.state === 'off' ? '○' : '?'}{' '}
+                        {l.key === 'power' && l.state === 'unknown'
+                          ? '未识别'
+                          : stateLabels[l.state]}
+                        {l.state === 'on' ? `（${colorLabels[l.color]}）` : ''}
+                      </strong>
+                      <p>
+                        {l.key === 'power'
+                          ? '仅展示电源灯状态，不影响检测结果'
+                          : l.manual
+                            ? '人工校对'
+                            : l.reason}
+                      </p>
+                      <div className="measurements">
+                        <span>峰值 {l.peak} / 255</span>
+                        <span>高亮像素 {l.brightPixels}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="analysis-summary">
+                  <h3>分析摘要</h3>
+                  <p>{result!.summary}</p>
+                  {[active.error, ...result!.warnings]
+                    .filter(Boolean)
+                    .map((warning, index) => (
+                      <div className="warning-line" key={index}>
+                        <TriangleAlert size={16} />
+                        <span>{warning}</span>
+                      </div>
+                    ))}
+                  <p className="method-note">
+                    按样例设备布局定位并测量发光像素。框位偏移时请重新框选机身；这里不显示未经模型验证的置信度。
+                  </p>
+                </div>
+                <div className="report-actions">
+                  <button
+                    className="button secondary"
+                    disabled={busy || exporting}
+                    onClick={() => void retry(active)}
+                  >
+                    <RotateCcw size={16} />
+                    重新识别
+                  </button>
+                  <button
+                    className="button primary"
+                    disabled={busy || exporting}
+                    onClick={() => setEdit(structuredClone(active))}
+                  >
+                    <Pencil size={16} />
+                    校对并保存
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label={`移除 ${active.name}`}
+                    disabled={busy || exporting}
+                    onClick={() => remove(active)}
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </section>
+            </div>
+          </>
+        )}
+        <footer>
+          <span>适配：样例蓝盖四灯设备</span>
+          <span>
+            照片和结果自动保存在本机；卸载应用或清除数据前，请导出 Excel 备份。
+          </span>
+        </footer>
+        <CameraDialog
+          open={cameraOpen}
+          onClose={() => setCameraOpen(false)}
+          onCapture={(file) => {
+            setCameraOpen(false);
+            void upload([file]);
+          }}
+        />
+        <Dialog
+          open={!!edit}
+          onOpenChange={(open) => {
+            if (!open) setEdit(null);
+          }}
+        >
+          <DialogContent className="edit-dialog">
+            <DialogTitle>校对设备灯态与条形码</DialogTitle>
+            <DialogDescription>
+              Negative、Positive、Invalid
+              只选一个亮起，选择后其余两个自动设为未亮；Power
+              是电源灯，仅展示，亮灭均不影响结果。请对照原图校对。
+            </DialogDescription>
+            {edit && (
+              <>
+                <label className="form-label">
+                  试管条形码
+                  <input
+                    className="text-input mono"
+                    value={edit.barcode}
+                    onChange={(e) =>
+                      setEdit({
+                        ...edit,
+                        barcode: e.target.value,
+                        barcodeSource: 'manual',
+                      })
+                    }
+                  />
+                </label>
+                <div className="edit-lamps">
+                  {edit.device.lamps.map((l) => (
+                    <div className="edit-lamp" key={l.key}>
+                      <span>
+                        {l.key === 'power' ? 'Power（仅展示）' : l.label}
+                      </span>
+                      <Select
+                        value={l.state}
+                        onValueChange={(value) => {
+                          if (value)
+                            setEdit({
+                              ...edit,
+                              device: setManualLampState(
+                                edit.device,
+                                l.key,
+                                value as LampState,
+                              ),
+                            });
+                        }}
+                      >
+                        <SelectTrigger aria-label={`${l.label} 灯态`}>
+                          <SelectValue>
+                            {l.key === 'power' && l.state === 'unknown'
+                              ? '未识别'
+                              : stateLabels[l.state]}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(stateLabels).map(([value, label]) => (
+                            <SelectItem key={value} value={value}>
+                              {l.key === 'power' && value === 'unknown'
+                                ? '未识别'
+                                : label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        disabled={l.state !== 'on'}
+                        value={l.color}
+                        onValueChange={(value) => {
+                          if (value)
+                            setEdit({
+                              ...edit,
+                              device: {
+                                ...edit.device,
+                                lamps: edit.device.lamps.map((x) =>
+                                  x.key === l.key
+                                    ? {
+                                        ...x,
+                                        color: value as LampColor,
+                                        manual: true,
+                                      }
+                                    : x,
+                                ),
+                              },
+                            });
+                        }}
+                      >
+                        <SelectTrigger aria-label={`${l.label} 颜色`}>
+                          <SelectValue>{colorLabels[l.color]}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(colorLabels)
+                            .filter(([v]) => v !== 'none' || l.state !== 'on')
+                            .map(([value, label]) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+                <p className="edit-conclusion">
+                  校对后：{conclude(edit.device).title}
+                </p>
+                <div className="dialog-actions">
+                  <button
+                    className="button secondary"
+                    onClick={() => setEdit(null)}
+                  >
+                    取消
+                  </button>
+                  <button className="button primary" onClick={saveEdit}>
+                    <CheckCheck size={16} />
+                    保存校对
+                  </button>
+                </div>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
+      </main>
+    </div>
+  );
 }
