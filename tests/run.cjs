@@ -21,6 +21,9 @@ const args = [
   'lib/barcode.ts',
   'lib/inspection.ts',
   'lib/export.ts',
+  'lib/file-export.ts',
+  'lib/standard-export.ts',
+  'lib/camera-layout.ts',
   'lib/record-store.ts',
 ];
 let result = spawnSync(process.execPath, args, { stdio: 'inherit' });
@@ -33,6 +36,10 @@ result = spawnSync(
     'tests/bad-cases.test.cjs',
     'tests/body-boundary.test.cjs',
     'tests/record-store.test.cjs',
+    'tests/file-export.test.cjs',
+    'tests/mobile-export.test.cjs',
+    'tests/standard-export.test.cjs',
+    'tests/camera-layout.test.cjs',
   ],
   {
     stdio: 'inherit',

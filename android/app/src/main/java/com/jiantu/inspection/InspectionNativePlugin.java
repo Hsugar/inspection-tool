@@ -1,16 +1,22 @@
 package com.jiantu.inspection;
 
 import android.app.Activity;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
 import android.content.ClipData;
+import android.content.IntentFilter;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.OpenableColumns;
 import android.provider.MediaStore;
 import android.util.AtomicFile;
 import android.util.Base64;
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.FileProvider;
+import androidx.core.content.ContextCompat;
 import com.getcapacitor.*;
 import com.getcapacitor.annotation.*;
 import java.io.*;
@@ -18,6 +24,9 @@ import java.util.*;
 
 @CapacitorPlugin(name = "InspectionNative")
 public class InspectionNativePlugin extends Plugin {
+    private BroadcastReceiver shareReceiver;
+    private PendingIntent shareCallback;
+
     private File recordDir() throws IOException {
         File directory = new File(getContext().getFilesDir(), "inspections");
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("无法创建本地记录目录");
@@ -183,14 +192,29 @@ public class InspectionNativePlugin extends Plugin {
     }
     @PluginMethod public void clearImports(PluginCall call) { clearImportFiles(); call.resolve(); }
     @PluginMethod public void saveExcel(PluginCall call) {
+        call.getData().put("mimeType", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        saveExport(call);
+    }
+    private File exportFile(PluginCall call) throws IOException {
+        Uri uri = Uri.parse(call.getString("path", ""));
+        if (!"file".equals(uri.getScheme()) || uri.getPath() == null) throw new IOException("导出文件无效");
+        File source = new File(uri.getPath()).getCanonicalFile();
+        File exports = new File(getContext().getCacheDir(), "exports").getCanonicalFile();
+        if (!exports.equals(source.getParentFile()) || !source.isFile()) throw new IOException("导出文件无效");
+        return source;
+    }
+    private String exportMimeType(PluginCall call) throws IOException {
+        String mimeType = call.getString("mimeType", "");
+        if (!ExportFiles.supportsMimeType(mimeType)) throw new IOException("不支持的导出格式");
+        return mimeType;
+    }
+    @PluginMethod public void saveExport(PluginCall call) {
         try {
-            File source = new File(Uri.parse(call.getString("path", "")).getPath()).getCanonicalFile();
-            File exports = new File(getContext().getCacheDir(), "exports").getCanonicalFile();
-            if (!source.getParentFile().equals(exports) || !source.isFile()) throw new IOException("导出文件无效");
+            exportFile(call);
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-            intent.putExtra(Intent.EXTRA_TITLE, call.getString("name", "检图.xlsx"));
+            intent.setType(exportMimeType(call));
+            intent.putExtra(Intent.EXTRA_TITLE, call.getString("name", "检图导出"));
             startActivityForResult(call, intent, "excelLocationSelected");
         } catch (Exception error) { call.reject("无法打开系统保存对话框", error); }
     }
@@ -200,14 +224,74 @@ public class InspectionNativePlugin extends Plugin {
             call.resolve(new JSObject().put("cancelled", true)); return;
         }
         getBridge().execute(() -> {
-        try (InputStream in = new FileInputStream(new File(Uri.parse(call.getString("path", "")).getPath()));
-             OutputStream out = getContext().getContentResolver().openOutputStream(result.getData().getData(), "wt")) {
-            if (out == null) throw new IOException("无法写入所选位置");
-            byte[] buffer = new byte[8192]; int count;
-            while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
-            out.flush();
+        try {
+            ExportFiles.copyAndClose(new FileInputStream(exportFile(call)),
+                () -> getContext().getContentResolver().openOutputStream(result.getData().getData(), "wt"));
             call.resolve(new JSObject().put("cancelled", false));
-        } catch (Exception error) { call.reject("Excel 保存失败", error); }
+        } catch (Exception error) { call.reject("数据保存失败，请检查所选存储位置是否可用", error); }
         });
+    }
+    @PluginMethod public void shareExport(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (shareReceiver != null) {
+                call.reject("系统分享面板已打开，请先关闭后重试");
+                return;
+            }
+            try {
+                File source = exportFile(call);
+                String mimeType = exportMimeType(call);
+                Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", source);
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType(mimeType);
+                send.putExtra(Intent.EXTRA_SUBJECT, "检图检测记录");
+                send.putExtra(Intent.EXTRA_STREAM, uri);
+                send.setClipData(new ClipData(call.getString("name", "检图导出"), new String[]{mimeType}, new ClipData.Item(uri)));
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+                // A private per-share callback distinguishes choosing a target from dismissing
+                // the sheet. Choosing an app does not prove that app saved or sent the file.
+                String action = getContext().getPackageName() + ".SHARE_EXPORT_" + UUID.randomUUID();
+                call.getData().put("shareTargetChosen", false);
+                shareReceiver = new BroadcastReceiver() {
+                    @Override public void onReceive(Context context, Intent intent) {
+                        if (action.equals(intent.getAction()) &&
+                            (intent.hasExtra(Intent.EXTRA_CHOSEN_COMPONENT) || intent.hasExtra(Intent.EXTRA_CHOOSER_RESULT))) {
+                            call.getData().put("shareTargetChosen", true);
+                        }
+                    }
+                };
+                ContextCompat.registerReceiver(getContext(), shareReceiver, new IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED);
+                int flags = PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_ONE_SHOT;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags |= PendingIntent.FLAG_MUTABLE;
+                // Restrict mutable callback delivery to this package, including Android 14+.
+                shareCallback = PendingIntent.getBroadcast(getContext(), 0,
+                    new Intent(action).setPackage(getContext().getPackageName()), flags);
+                Intent chooser = Intent.createChooser(send, "分享检测数据", shareCallback.getIntentSender());
+                startActivityForResult(call, chooser, "exportShareClosed");
+            } catch (Exception error) {
+                clearShareCallback();
+                call.reject("无法打开系统分享面板", error);
+            }
+        });
+    }
+    @ActivityCallback private void exportShareClosed(PluginCall call, ActivityResult result) {
+        clearShareCallback();
+        if (call == null) return;
+        boolean selected = call.getBoolean("shareTargetChosen", false) || result.getResultCode() == Activity.RESULT_OK;
+        call.resolve(new JSObject().put("cancelled", !selected));
+    }
+    private void clearShareCallback() {
+        if (shareCallback != null) {
+            shareCallback.cancel();
+            shareCallback = null;
+        }
+        if (shareReceiver != null) {
+            try { getContext().unregisterReceiver(shareReceiver); }
+            catch (IllegalArgumentException ignored) { /* Registration may have failed. */ }
+            shareReceiver = null;
+        }
+    }
+    @Override protected void handleOnDestroy() {
+        clearShareCallback();
     }
 }

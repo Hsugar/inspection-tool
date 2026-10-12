@@ -24,6 +24,16 @@ export const InspectionNative = registerPlugin<{
     name: string;
     path: string;
   }): Promise<{ cancelled: boolean }>;
+  saveExport(options: {
+    name: string;
+    path: string;
+    mimeType: string;
+  }): Promise<{ cancelled: boolean }>;
+  shareExport(options: {
+    name: string;
+    path: string;
+    mimeType: string;
+  }): Promise<{ cancelled: boolean }>;
 }>('InspectionNative');
 export async function pickAndroidPhotos(): Promise<File[]> {
   const { photos } = await InspectionNative.pickPhotos();
