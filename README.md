@@ -93,6 +93,20 @@ npx cap open android
 
 修改源码后先运行 `npm run apk:release`，再安装新的正式 APK。离线 APK 不依赖 `npm run dev` 或本地网页服务器。
 
+### Android Studio 调试
+
+Android Studio 的 Run 只编译原生工程，不会自动重新构建网页资源。修改网页源码后，在项目根目录先运行 `npm run android:sync`，再在 Studio 选择目标模拟器并点击 Run。
+
+也可以一次完成资源同步和调试包构建，再覆盖安装到当前模拟器：
+
+```sh
+npm run apk:debug
+"$HOME/Library/Android/sdk/platform-tools/adb" -e install -r releases/jiantu-1.0.9-debug.apk
+"$HOME/Library/Android/sdk/platform-tools/adb" -e shell am start -n com.jiantu.inspection/.MainActivity
+```
+
+已有调试版的模拟器使用调试包覆盖；已有正式版的设备使用正式包覆盖。两者签名不同，不混装；多台模拟器同时运行时，用 `-s 实际序列号` 指定目标。
+
 ### 应用操作
 
 1. 从首页进入“录入”并点击“选择照片”，使用安卓系统文件/照片选择器，可长按多选；现场采集可从底部“拍照”页开启相机。

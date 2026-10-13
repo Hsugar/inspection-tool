@@ -1,6 +1,15 @@
 # Android 验收记录
 
-测试日期：2026-09-07 至 2026-10-10（北京时间）。
+测试日期：2026-09-07 至 2026-10-12（北京时间）。
+
+## 1.0.9 Android Studio 调试包刷新（2026-10-12）
+
+- **原因**：Android Studio 当前选中 `Medium_Phone_API_36.1`（`emulator-5554`），其中仍安装 1.0.3 / versionCode 4 调试包；此前 1.0.9 正式包安装在另一台 Pixel 模拟器。Studio 的 Run 不自动构建网页资源，日常调试步骤已补充到 README。
+- **源码与正式交付**：本轮未修改应用源码。沿用已验证的 1.0.9 / versionCode 10；原正式 APK `releases/jiantu-1.0.9-release.apk` 保持不变，未新建或替换正式签名密钥。
+- **资源同步与调试构建完成**：`npm run apk:debug` 完成移动端资源构建、Capacitor 同步及 Gradle Debug 构建。产物 `releases/jiantu-1.0.9-debug.apk`，SHA-256：`541e27ec29bc323f485dd5bf76b7627435e416ef4136d2b3194ca08ef8464338`。9 个移动端构建文件与 APK 逐字节一致，全部网页资源也与既有正式 APK 相同，因此未重复运行已通过的相同源码功能回归或正式构建。
+- **当前模拟器升级完成**：先备份检图应用记录，再通过 `adb -s emulator-5554 install -r` 成功覆盖升级并启动。系统包信息显示 versionName 1.0.9、versionCode 10、DEBUGGABLE；没有卸载应用或清除数据。
+- **界面与记录验证完成**：首页实际显示「首页、录入、拍照、我的」四个底部入口；点击「我的」后显示 1.0.9。旧的 1 条拍照记录恢复正常，升级前后的原图与 JSON 两个文件逐字节一致。
+- **范围**：本轮为 Android Studio 模拟器调试包更新与启动验证，没有连接真机，未新增相机拍摄、文件导出或 OTG 验证。证据在 `test-output/1.0.9/debug-refresh-20261012/`，包括构建日志、升级前后包信息及记录备份、界面 XML 与截图。
 
 ## 1.0.9 四页底部导航与 Android 验证（2026-10-10）
 
