@@ -10,6 +10,7 @@ final class ExportFiles {
 
     static boolean supportsMimeType(String mimeType) {
         return "text/csv".equals(mimeType)
+            || "application/hl7-v2".equals(mimeType)
             || "application/fhir+json".equals(mimeType)
             || "application/fhir+xml".equals(mimeType)
             || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".equals(mimeType);
@@ -17,8 +18,9 @@ final class ExportFiles {
 
     static String fhirMimeType(String name) {
         if (name == null) return null;
-        if (name.startsWith("检图_fhir-json_") && name.endsWith(".json")) return "application/fhir+json";
-        if (name.startsWith("检图_fhir-xml_") && name.endsWith(".xml")) return "application/fhir+xml";
+        if ((name.startsWith("检图_fhir-json_") || name.startsWith("GenDX_T_fhir-json_")) && name.endsWith(".json")) return "application/fhir+json";
+        if ((name.startsWith("检图_fhir-xml_") || name.startsWith("GenDX_T_fhir-xml_")) && name.endsWith(".xml")) return "application/fhir+xml";
+        if (name.startsWith("GenDX_T_hl7-v2_") && name.endsWith(".hl7")) return "application/hl7-v2";
         return null;
     }
 

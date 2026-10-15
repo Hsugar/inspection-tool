@@ -4,7 +4,7 @@ import android.net.Uri;
 import androidx.core.content.FileProvider;
 import java.util.List;
 
-/** Keep the FHIR media type when recipients query an exported file's content URI. */
+/** Keep the FHIR/HL7 media type when recipients query an exported file's content URI. */
 public class InspectionFileProvider extends FileProvider {
     @Override public String getType(Uri uri) {
         // Let FileProvider validate and resolve the configured root first.

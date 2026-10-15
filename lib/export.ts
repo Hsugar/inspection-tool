@@ -6,10 +6,11 @@ import {
   type Inspection,
 } from './inspection';
 import { lampDefinitions } from './device-vision';
+import { genderLabels } from './patient';
 export async function createWorkbook(records: Inspection[]) {
   const { default: ExcelJS } = await import('exceljs');
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = '检图';
+  workbook.creator = 'GenDX_T';
   workbook.created = new Date();
   const sheet = workbook.addWorksheet('检测汇总', {
     views: [{ state: 'frozen', ySplit: 1 }],
@@ -20,15 +21,24 @@ export async function createWorkbook(records: Inspection[]) {
     { header: '文件名', width: 28 },
     { header: '试管条形码（文本）', width: 28 },
     { header: '条码来源', width: 18 },
-    { header: '综合指示', width: 30 },
+    { header: '确认结果', width: 30 },
     ...lampDefinitions.map((l) => ({
       header: l.key === 'power' ? 'Power（电源，仅展示）' : l.label,
       width: 22,
     })),
-    { header: '人工校对', width: 15 },
+    { header: '用户确认', width: 15 },
     { header: '处理耗时(ms)', width: 16 },
     { header: '处理时间', width: 24 },
     { header: '核对提示', width: 60 },
+    { header: '患者名字', width: 20 },
+    { header: '患者性别', width: 12 },
+    { header: '患者年龄（岁）', width: 18 },
+    { header: '患者编号（文本）', width: 28 },
+    { header: '联系方式（文本）', width: 28 },
+    { header: '检测项目', width: 16 },
+    { header: '确认保存时间', width: 28 },
+    { header: '记录锁定时间', width: 28 },
+    { header: '设备原始指示（仅供追溯）', width: 30 },
   ];
   for (const [i, r] of records.entries()) {
     const result = conclude(r.device);
@@ -42,7 +52,13 @@ export async function createWorkbook(records: Inspection[]) {
         : r.barcodeSource === 'manual'
           ? '人工录入'
           : '未识别',
-      result.title,
+      r.phase === 'error'
+        ? '处理失败'
+        : r.phase !== 'done'
+          ? '处理中'
+          : needsReview(r)
+            ? '待确认'
+            : result.title,
       ...lampDefinitions.map((d) => {
         const lamp = r.device.lamps.find((l) => l.key === d.key);
         return lamp
@@ -51,14 +67,25 @@ export async function createWorkbook(records: Inspection[]) {
             ? '未识别'
             : '待确认';
       }),
-      needsReview(r) ? '待确认' : '已校对',
+      needsReview(r) ? '待确认' : '已确认',
       r.elapsedMs,
       r.createdAt,
       [r.error, ...result.warnings].filter(Boolean).join('\n'),
+      r.patient?.name || '',
+      r.patient ? genderLabels[r.patient.gender] : '',
+      r.patient ? Number(r.patient.age) : '',
+      r.patient?.patientId || '',
+      r.patient?.contact || '',
+      r.patient?.testItem || '',
+      r.confirmedAt || '',
+      r.lockedAt || '',
+      r.phase === 'done' ? result.title : '',
     ]);
     row.height = 112;
     row.alignment = { vertical: 'middle', wrapText: true };
     row.getCell(4).numFmt = '@';
+    row.getCell(18).numFmt = '@';
+    row.getCell(19).numFmt = '@';
     if (r.thumbnail) {
       const id = workbook.addImage({ base64: r.thumbnail, extension: 'jpeg' }),
         scale = Math.min(148 / r.thumbnailWidth, 132 / r.thumbnailHeight);
@@ -130,7 +157,7 @@ export async function exportExcel(records: Inspection[]) {
     );
   const a = document.createElement('a');
   a.href = url;
-  a.download = `设备灯态检测_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.download = `GenDX_T_${new Date().toISOString().slice(0, 10)}.xlsx`;
   document.body.appendChild(a);
   a.click();
   a.remove();

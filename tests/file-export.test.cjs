@@ -7,6 +7,7 @@ test('all file formats pass valid MIME types and bytes to the browser save picke
     csv: ['text/csv', '.csv'],
     'fhir-json': ['application/fhir+json', '.json'],
     'fhir-xml': ['application/fhir+xml', '.xml'],
+    'hl7-v2': ['application/hl7-v2', '.hl7'],
     xlsx: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.xlsx'],
   };
   for (const [format, [mime, extension]] of Object.entries(expectations)) {

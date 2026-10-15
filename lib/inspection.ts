@@ -5,6 +5,8 @@ import {
   type LampKey,
   type LampState,
 } from './device-vision';
+import type { PatientInfo } from './patient';
+export type { PatientInfo } from './patient';
 export type Conclusion = {
   code: 'positive' | 'negative' | 'invalid' | 'conflict' | 'unknown';
   title: string;
@@ -32,6 +34,9 @@ export type Inspection = {
   phase: 'queued' | 'reading' | 'done' | 'error';
   error: string;
   reviewed: boolean;
+  patient?: PatientInfo;
+  lockedAt?: string;
+  confirmedAt?: string;
   createdAt: string;
   createdTimestamp?: number;
   runtimeStats?: {
@@ -113,7 +118,7 @@ export function conclude(device: DeviceVision): Conclusion {
       code: 'conflict',
       title: '结果灯不符合互斥规则，待确认',
       summary:
-        'Negative、Positive、Invalid 只应有一个亮起。请重新识别旧记录或校对结果灯；Power 电源灯不参与结果判定。',
+        'Negative、Positive、Invalid 只应有一个亮起。当前照片无法可靠区分结果灯，请重新录入并拍摄。',
       tone: 'amber',
     };
   if (
@@ -127,7 +132,8 @@ export function conclude(device: DeviceVision): Conclusion {
       ...base,
       code: 'unknown',
       title: '待确认',
-      summary: '结果灯尚未可靠区分，请检查串光、框选机身或人工校对。',
+      summary:
+        '结果灯尚未可靠区分，可能存在串光或图像不清晰，请重新录入并拍摄。',
       tone: 'amber',
     };
   if (states.invalid === 'on')
@@ -173,4 +179,27 @@ export function needsReview(record: Inspection) {
     conclude(record.device).code === 'unknown' ||
     conclude(record.device).code === 'conflict'
   );
+}
+
+/** Confirmation locks the captured evidence, never changes optical results. */
+export function confirmInspection(
+  record: Inspection,
+  at = new Date(),
+): Inspection {
+  if (record.lockedAt) throw new Error('检测记录已保存，只能查看和导出');
+  if (record.phase !== 'done' && record.phase !== 'error')
+    throw new Error('请等待照片处理完成');
+  if (!Number.isFinite(at.getTime())) throw new Error('确认时间无效');
+  const result = conclude(record.device).code;
+  const reviewed =
+    record.phase === 'done' &&
+    Boolean(record.barcode) &&
+    result !== 'unknown' &&
+    result !== 'conflict';
+  return {
+    ...record,
+    reviewed,
+    lockedAt: at.toISOString(),
+    confirmedAt: at.toISOString(),
+  };
 }

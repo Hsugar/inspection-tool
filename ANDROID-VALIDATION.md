@@ -1,6 +1,84 @@
 # Android 验收记录
 
-测试日期：2026-09-07 至 2026-10-12（北京时间）。
+测试日期：2026-09-07 至 2026-10-14（北京时间）。
+
+## 1.1.0 结果页操作精简（2026-10-14）
+
+- **源码完成**：结果页按钮精简为 `New photo / 重新拍照或上传`，移除尾部重复录入说明；删除动作区底部的 Home / History 跳转按钮，保留固定底部 Tab。重新录入、确认保存、只读历史及结果判断逻辑不变。版本保持 `1.1.0 / 11`。
+- **源码与网页检查完成**：TypeScript、定向 lint、`git diff --check`、网站生产构建通过。独立 `localhost:5173` 测试页生成结果后，实际动作区仅有 New photo / Confirm result，底部三项 Tab 均保留，旧文案不存在；点击 New photo 仍进入空白患者表单。用户 `127.0.0.1` 数据未写入测试记录。检查结果：`test-output/result-actions-cleanup/web-checks.json`；测试结果资料区域截图为 `web-result-detail.png`。本轮仅删文案/入口，沿用相同业务逻辑已通过的 67 项 Node 与 13 项 JVM 回归。
+- **Android 同步与构建完成**：最终移动端构建、Capacitor 同步、debug/release 构建通过；两个 APK 各 16 个资源与 `dist-mobile/` 和 Android 同步目录逐字节一致。证据位于 `test-output/result-actions-cleanup/`。
+- **当前正式 APK**：`releases/GenDX_T-1.1.0-release.apk`，6,501,121 字节，SHA-256 `a21ac38916d9dee6cc61be46f28b26d42076ccc4181a43214c5ab53b0e293bf4`。v2 验签通过，原正式证书 SHA-256 保持 `36019414c7013c50ada50c0942d10e3589f2ec6fc2dddafc0719f4251a051bb9`。debug SHA-256 为 `20d3219b960b05f6c73402b5a8bcfdd34e21aea4ce8b9797c21d933b31c095f0`；下方同版本产物为历史构建。
+- **模拟器更新完成**：`Medium_Phone_API_36.1 / emulator-5554` 同签名覆盖安装并冷启动，原记录/图片共 2 文件与全部 3 个偏好文件 SHA-256 一致，未卸载、清数据或创建新记录。报告及首页运行截图：`emulator-after/verification.json`、`emulator-after/studio-home.png`。结果页交互本轮在浏览器验证；模拟器未重复尝试此前不可用的 CUA 点击，未做真机相机或选图实测。未发布远程站点。
+
+## 1.1.0 恢复上传照片与并列按钮（2026-10-14）
+
+- **源码完成**：表单增加 Upload photo / 上传照片，与 Take photo / 拍照在全部屏幕保持同一行等宽并列，共用主色、边框、启用/禁用状态和必填校验。每次选一张 JPG、PNG 或 WebP（不超过 20 MB）；取消、空文件、不支持格式、超限或图片解码失败均保留患者草稿，不创建记录。两入口复用 `processPhoto`，患者快照与原图先入库，识别后可确认并只读保存。只有首次入库成功后清空草稿；同一图片可再次用于新的独立录入。
+- **Android 源码完成**：复用 `ACTION_OPEN_DOCUMENT` 系统选图入口，显式单选并校验异常多张返回，保留旧多选接口兼容性；取消返回空数组，原生及 JS 异常均清理临时导入文件，保留原读取错误。未新增相册/全盘存储权限。
+- **回归与源码检查完成**：67 项 Node 回归通过（含新增 4 项文件格式/大小边界、6 项原生桥参数/取消/读错/清理测试）；原生桥 lint 修复后其 6 项再次通过。13 项 Android JVM 检查通过。最终 TypeScript、定向 lint、`git diff --check`、网站生产构建通过。日志位于 `test-output/photo-upload/`。
+- **浏览器流程实测完成**：在独立 `localhost:5173` 测试来源以虚构患者数据上传 `test-img/a-2.jpg`，恢复条码 `01202609030005`、Positive 指示及患者信息，确认保存后刷新，历史仍保留已确认状态。损坏 JPG 的即时界面显示重选提示、草稿保留且两个入口可用；重新开始清空表单，同一图片可创建第二条独立记录。开发热更新期间的一次确认和延后查询作废，已在源码稳定后重新完成确认/持久化验证；详情保留在 `web-checks.json`。用户 `127.0.0.1` 浏览器记录未写入测试数据。
+- **布局实测完成**：桌面启用态两按钮均约 406×48px，476px 视口禁用态均为 190×48px、同一 y 坐标、同样背景/边框/文字色及 0.45 透明度；320px 视口均为 122×48px，无水平溢出。截图：`web-entry.png`、`web-result.png`、`web-history.png`。
+- **Android 同步与正式 APK 完成**：最终移动端构建、Capacitor 同步、debug/release 构建通过；每个包 16 个资源与 `dist-mobile/` 及 Android 同步目录逐字节一致。版本保持 `1.1.0 / 11`，正式 APK `releases/GenDX_T-1.1.0-release.apk`，6,501,169 字节，SHA-256 `94b683ec8d56039ef89d0b39eeaf9870a0a2fe93a7831e6617f10e3fea043fda`。v2 验签通过，沿用证书 `36019414c7013c50ada50c0942d10e3589f2ec6fc2dddafc0719f4251a051bb9`，未替换密钥。debug SHA-256 `db5f9f4f1c977c642bd240d7edd24b9a1c0b2c6e09e6ec37f7010adb6bc19722`；下方同版本产物均为历史构建。
+- **模拟器更新完成，选图交互未实测**：`Medium_Phone_API_36.1 / emulator-5554` 同签名覆盖安装最终 debug 并冷启动，原记录与图片共 2 文件及全部 3 个偏好文件 SHA-256 一致。CUA 可读取 Studio 窗口和截图，但点击报 `noWindowsAvailable`，因此未实际打开系统选图器、取消或导入 Android 照片，不把构建/资源一致性当作该交互通过。证据：`emulator-after/verification.json`、`emulator-after/studio-home.png`。未连接物理手机、未新增实际相机或 OTG 验收，未发布远程站点。
+
+## 1.1.0 首页与设置页文案精简（2026-10-14）
+
+- **源码完成**：按截图移除首页底部本机处理说明及图标、设置页副标题、默认导出格式整行、本机记录数量整行及底部记录提示。中英文同步移除，并清理闲置组件参数、回调和样式。设置保留语言、隐私及关于，首页历史入口保留；导出弹窗仍提供全部格式，并兼容读取旧版格式偏好。版本保持 `1.1.0 / 11`。
+- **源码与网页检查完成**：TypeScript、定向 lint、网站生产构建通过。浏览器分别核对中英文首页与设置页，指定元素均不存在，设置仅剩三行；英文页面无横向溢出，隐私弹窗可正常打开/关闭。验证后恢复英文。证据：`test-output/ui-copy-cleanup/web-checks.json`、`web-home.png`、`web-settings.png`。识别、记录、导出编码逻辑未改，沿用此前 57 项 Node / 13 项 JVM 通过结果。
+- **Android 同步及构建完成**：移动端构建、Capacitor 同步、调试与正式构建通过；两个 APK 各 16 个资源与 `dist-mobile/` 和 Android 同步目录逐字节一致。日志与 `apk-verification.json` 位于 `test-output/ui-copy-cleanup/`。
+- **该阶段正式 APK**：`releases/GenDX_T-1.1.0-release.apk`，6,500,257 字节，SHA-256 `30b9065837fe414218c7eb29da9a617530c3747fe979dff8a946f5970b8c0a12`。v2 签名验证通过，证书 SHA-256 仍为 `36019414c7013c50ada50c0942d10e3589f2ec6fc2dddafc0719f4251a051bb9`。调试包 SHA-256 为 `fc02a16515b229e9694924075c3b9732dad0899f4a5cbd2ef43b30cde9cfca25`。未生成或替换密钥；最新产物见上方记录。
+- **模拟器更新与首页视觉核对完成**：`Medium_Phone_API_36.1 / emulator-5554` 使用本轮同签名 debug APK 覆盖安装并冷启动，保持 `1.1.0 / 11`。原记录与原图共 2 文件及 3 个偏好文件逐字节一致，未卸载或清数据。Android Studio 截图确认首页底部说明已移除、原历史记录数量保留；设置页交互本轮在浏览器验证。证据：`test-output/ui-copy-cleanup/emulator-after/verification.json`、`android-studio.png`。
+- **验证范围**：页面及隐私入口在浏览器实测；未做物理设备相机、实际试管识别或 OTG 验收。未发布远程站点。
+
+## 1.1.0 首页文案精简与入口居中（2026-10-14）
+
+- **源码完成**：移除首页设备下方 `GenDx / Infection POCT Innovator` 和主标题上方 `GenDX_T · POINT OF CARE` 文案及闲置样式。Enter / 开始检测文字相对按钮整体居中，箭头独立固定在右侧；英文/中文共用布局，点击流程不变。版本保持 `1.1.0 / 11`。
+- **源码与网页检查完成**：TypeScript、定向 lint、`git diff --check`、网站生产构建通过。浏览器确认两处重复文案元素不存在，Enter 文字中心相对按钮中心误差小于 0.01px；点击仍进入空白患者表单。截图/测量证据：`test-output/home-copy-refresh/web-home.png`、`web-checks.json`。识别、记录及导出逻辑未改，沿用此前 57 项 Node / 13 项 JVM 通过结果。
+- **Android 同步及构建完成**：移动端构建、Capacitor 同步、调试及正式构建通过；两种 APK 各 16 个资源与 `dist-mobile/` 及同步目录逐字节一致。证据位于 `test-output/home-copy-refresh/` 的构建日志和 `apk-verification.json`。
+- **该阶段正式 APK**：`releases/GenDX_T-1.1.0-release.apk`，6,501,021 字节，SHA-256 `5f41a6fbad137980f09df5606e03ea4ea1933251f2abe4a888a5b1058e7a42cc`。v2 签名校验通过，沿用原正式证书。调试 APK 的 SHA-256 为 `973bf1d1dafc934cdae8fcb0a161b61cd652e287ca47aead26d62e1b2f8b2143`。最新产物见上方记录。
+- **模拟器更新及视觉核对完成**：`Medium_Phone_API_36.1 / emulator-5554` 已同签名覆盖安装本轮 debug 包并冷启动，保持 `1.1.0 / 11`。原记录与图片共 2 文件及全部 3 个偏好文件逐字节一致，未卸载/清数据。Android Studio 画面已确认三行文案移除、Enter 居中。证据：`test-output/home-copy-refresh/emulator-after/verification.json`、`android-studio.png`。
+- **验证范围**：本轮首页布局及入口操作在浏览器验证，未进行物理设备相机及真实试管识别验收；未发布远程站点。
+
+## 1.1.0 首页图片与表单紧凑样式（2026-10-14）
+
+- **图片完成**：使用内置 imagegen 去除用户提供图片右下角“豆包 AI 生成”水印，保存为 `public/gendx-device.png`（867×1815）。设备文字、Logo 与整体外观已目视核对；此为生成式编辑，不宣称像素级完全不变。原始用户文件未覆盖。完整提示词、来源及输出记录在 `test-output/product-refresh/image-edit.txt`。首页替换为该图，并调整展示尺寸以完整显示设备；Android 离线资源改为打包新图。
+- **表单源码完成**：聚焦时直接使用蓝色边框及 1px 内描边，取消患者输入框、下拉、搜索、筛选及设置控件的外侧焦点间隙。患者框桌面 `49→46px`、移动端 `47→44px`，搜索/历史筛选/设置 select 的上下内边距合计减少 3px。操作按钮、复选框、下拉选项点击区域及业务规则保持不变。版本继续依用户要求保持 `1.1.0 / 11`。
+- **源码与网页验证完成**：TypeScript、定向 lint、`git diff --check`、网站生产构建通过。浏览器实测桌面输入框 46px、移动端输入框/下拉框 44px；聚焦计算样式为蓝色边框、`outline:none`、`outline-offset:0` 和 `inset` 描边，无双框空隙。桌面/移动首页设备完整显示。未重新执行此前相同逻辑源码已通过的 57 项 Node 与 13 项 JVM 测试。证据：`test-output/product-refresh/typecheck.log`、`lint.log`、`web-build.log`、`web-checks.json`、`web-home.png`、`web-focus.png`。
+- **Android 资源同步完成**：移动端构建、Capacitor 同步通过；正式/调试包各 16 个资源与 `dist-mobile/` 及 Android 同步目录逐字节一致。新图已打包，旧 `product-reference.png` 不再进入 Android APK。证据 `test-output/product-refresh/android-sync.log`、`apk-verification.json`。
+- **正式 APK 构建及验签完成**：`releases/GenDX_T-1.1.0-release.apk`，6,501,113 字节，SHA-256 `b2f2ed13b47f7cec4825d4e8cb678b785713919c68ca91c79da63ab3bcf391ed`。v2 验签通过，证书 SHA-256 仍为 `36019414c7013c50ada50c0942d10e3589f2ec6fc2dddafc0719f4251a051bb9`；未生成或替换密钥。调试包 `releases/GenDX_T-1.1.0-debug.apk`，SHA-256 `deec218c12543c9d4c4199264fb8c840a765d1da8079ccf225481e2cd4a0ceac`。构建/签名/版本证据位于 `test-output/product-refresh/`。此为图片与表单样式阶段的构建，最新产物见上方记录。
+- **模拟器更新完成**：`Medium_Phone_API_36.1 / emulator-5554` 已使用本轮同签名 debug APK 覆盖安装并冷启动，仍为 `1.1.0 / 11`。原记录与图片共 2 文件、3 个偏好文件的 SHA-256 全部保持一致，未卸载或清空数据。Android Studio 画面已确认新版设备图及原记录数量。证据：`test-output/product-refresh/emulator-before/`、`emulator-after/verification.json`、`android-studio.png`。
+- **设备验收边界**：本轮页面交互及尺寸在浏览器验证；尚未进行物理手机、实际试管与摄像头识别验收。未发布远程站点。
+
+## 1.1.0 下拉样式及模拟器更新（2026-10-14）
+
+- **源码完成**：患者性别与检测项目共用 `PatientSelect`，复用已安装的 Base UI Select。箭头距右侧 16px，弹层与输入框间隔 6px，白色圆角菜单、蓝色选中标记、44px 最小选项高度，支持键盘、触摸及可用高度内滚动。保留旧版蓝色、既有业务校验和版本 `1.1.0 / 11`。
+- **源码检查完成**：TypeScript、页面/新组件定向 lint、`git diff --check` 通过。识别、记录及导出逻辑未变，沿用之前通过的 57 项 Node 与 13 项 Android JVM 检查。证据 `test-output/dropdown-refresh/typecheck.log`、`lint.log`。
+- **网页交互完成**：本地浏览器验证性别选值回填、全部 7 个检测项目、方向键/Enter/Escape、菜单在小屏可用空间内显示；使用临时虚构草稿确认填满表单可启用拍照、清空必填后禁用、重新进入恢复空表单。未打开相机或产生新记录。截图与检查记录：`test-output/dropdown-refresh/web-gender.png`、`web-checks.json`。
+- **网页版构建与 Android 资源同步完成**：生产构建、移动端构建及 Capacitor 同步通过。正式和调试 APK 各 16 个资源均与 `dist-mobile/` 及同步目录逐字节一致。证据：`test-output/dropdown-refresh/web-build.log`、`android-sync.log`、`apk-verification.json`。未发布远程站点。
+- **正式 APK 完成**：`releases/GenDX_T-1.1.0-release.apk`，4,778,630 字节，SHA-256 `e8b6e1e29e71e96563be14259457cef4c557f5b0c6599ca45107bbcd79fe2708`。版本 `1.1.0 / 11`，v2 验签通过，证书 SHA-256 仍为 `36019414c7013c50ada50c0942d10e3589f2ec6fc2dddafc0719f4251a051bb9`，未生成或替换密钥。构建及签名日志位于 `test-output/dropdown-refresh/release-build.log`、`release-signature.txt`、`release-badging.txt`。此为下拉样式阶段的交付构建，同版本最新产物见上方记录。
+- **模拟器更新和启动完成**：已备份 `Medium_Phone_API_36.1 / emulator-5554` 旧应用数据及 APK，再以相同 debug 证书 `install -r` 从 `1.0.9 / 10` 覆盖到 `1.1.0 / 11`，冷启动成功。安装包 `releases/GenDX_T-1.1.0-debug.apk`，SHA-256 `5267522c8559119dcb92fd5c19abd74f7a4fc04f7e76a7a6f7539c3d311638ff`。原 1 条记录及图片共 2 文件逐字节一致，既有偏好文件均保留；未卸载或清空数据。证据：`test-output/dropdown-refresh/emulator-before/`、`emulator-after/verification.json`、`debug-build.log`。
+- **设备验证范围**：通过 Android Studio 画面确认新版首页、GenDx Logo、蓝色主题及原记录数量；截图 `test-output/dropdown-refresh/android-studio.png`。CUA 原生窗口点击返回 `noWindowsAvailable`，因此本轮下拉交互实测仅在网页版完成，未宣称 Android 下拉操作或真机摄像头/真实样本已验收。
+
+## 1.1.0 恢复旧版蓝色主题（2026-10-14）
+
+- **源码完成**：主色恢复为 `#2855dc`，同步按钮、导航、选中状态、焦点、文字及浅色底色；保留新版布局、流程和 GenDx Logo。结果绿/红/琥珀色、灯态与待确认颜色不变。依用户本次明确要求，版本保持 `1.1.0 / versionCode 11`。
+- **源码检查完成**：TypeScript 与 `git diff --check` 通过。本轮仅改主题 CSS 和说明文档，检测、记录及导出逻辑未变；沿用同一份逻辑源码已通过的 57 项 Node 和 13 项 Android JVM 回归，不重复运行。日志 `test-output/blue-theme/typecheck.log`。
+- **网页版完成**：网站生产构建通过，日志 `test-output/blue-theme/web-build.log`。在现有本地预览中检查首页蓝色按钮、底部导航及设置页 `1.1.0` 文本；按钮计算背景为 `rgb(40, 85, 220)`。截图 `test-output/blue-theme/home.png` 和 `settings.png`。本次未重新执行完整相机、确认、导出端到端流程，未发布远程站点。
+- **Android 资源同步完成**：移动端构建与 Capacitor 同步通过，日志 `test-output/blue-theme/android-sync.log`。16 个资源与 `dist-mobile/`、Android 同步目录及最终 APK 逐字节一致。
+- **正式 APK 构建及验签完成**：`releases/GenDX_T-1.1.0-release.apk`，包名 `com.jiantu.inspection`，版本 `1.1.0 / 11`，4,751,842 字节。SHA-256：`e1187ab11eea9412f4abda60d17f9b3f201790e8e107d2a9f3b685e6cbafeba3`。v2 验签通过，证书 SHA-256 `36019414c7013c50ada50c0942d10e3589f2ec6fc2dddafc0719f4251a051bb9` 与既有正式版一致；未生成或替换密钥。证据：`test-output/blue-theme/apk-build.log`、`apk-verification.json`、`apk-signature.txt`、`apk-badging.txt`。此为蓝色主题阶段的构建；下节同版本更早构建保存在 `test-output/blue-theme/before-blue-GenDX_T-1.1.0-release.apk`。
+- **设备实测未完成**：本次没有安装或操作 Android 模拟器/物理设备；网页视觉检查、资源一致性和构建成功不等于 Android 设备实测。
+
+## 1.1.0 GenDX_T 文档流程与品牌重构（2026-10-14）
+
+- **源码完成**：按附件 Word 的流程和页面图改为“历史 / 首页 / 我的”三入口。新增六项必填患者信息（姓名、性别、0–150 岁整数年龄、患者编号、联系方式、检测项目）；项目为 MTB、GBS、Flu A、Flu B、NG、MG、CT。每次拍照先独立录入；重新拍摄会清空表单并新建记录，原记录保留。移除文件上传、批量选图、人工改条码/改灯态、手动框选重算及删除入口。
+- **只读记录完成**：患者与原图首次写入后固定，识别阶段可前进，完成后仅允许一次确认写入确认时间并锁定。历史不能修改、删除或重新确认。未确认、无条码、冲突或未知记录在历史归入待确认，导出也不会变成确认阴阳。共享存储与 Android 原生均验证状态；浏览器还校验同一事务中的旧快照，防止另一窗口覆盖已保存结果。旧存储名和包名保持不变，旧记录不补造患者信息。
+- **品牌与界面完成**：使用附件 GenDx 正常版/反白版原图；正常版透明边界裁剪图用于浅色各页与弹窗，替换 favicon、Android 各密度图标及启动图标。首页使用 Word 设备示意。默认英文，可持久化切换简体中文和默认导出格式。保留结果灯互斥、无法可靠排除串光则待确认、Power 只展示的规则。
+- **导出完成**：历史支持多选和全量；Excel、CSV、FHIR JSON/XML 增加患者六字段和确认时间，新增 HL7 v2.5.1 ORU R01 离线批次。患者与样本编号保留前导零，年龄不推导生日，项目及设备指示使用本地术语。FHIR 新增 Patient 与 subject，旧无患者记录不补造 Patient。未做接收方医院联调、官方完整 HL7/FHIR 认证或在线传输。
+- **自动检查完成**：57 项 Node 测试通过；包含原光学回归、患者校验、确认语义、跨窗口防覆盖、不可改删、患者跨格式导出回读、HL7 字段位置/转义和文件保存失败路径。13 项 Android JVM 单元测试通过（7 项记录策略、5 项导出、1 项既有示例）。TypeScript 检查通过；页面、相机、导出与本次修改的数据模块定向 lint 通过；`git diff --check` 通过。日志：`test-output/gendx-tests.log`。
+- **网页版构建完成**：最终源码网站生产构建通过，日志 `test-output/gendx-web-build.log`。使用本地预览，不发布远程站点。
+- **浏览器交互实测未完成**：已准备 `test-output/gendx-ui-check.mjs`，计划覆盖 390×844/桌面布局、必填校验、模拟相机识别、确认、历史选定/全部导出及刷新持久化。首次浏览器启动被沙盒阻止（SIGABRT），提权运行随后被用户中止；最终 `test-output/gendx-ui/results.json` 为 checks=0，无验收截图，不宣称端到端通过。未再尝试绕过或重复请求授权。
+- **Android 资源同步完成**：移动端 Vite 构建与 Capacitor 同步通过，日志 `test-output/gendx-android-sync.log`。明确打包品牌图、设备图、favicon、离线 barcode WASM；不打包既有闲置 OCR 模型。
+- **正式 APK**：版本 `1.1.0 / 11`，目标 `releases/GenDX_T-1.1.0-release.apk` 及 `.sha256`。包名仍 `com.jiantu.inspection`，复用既有签名；签名文件缺失时打包脚本现在直接失败，不再自动生成密钥。最终正式构建通过；产物 4,752,070 字节，SHA-256：`7739b847d4246b4aa470c934e129ee72220c492d1b4536635b9962ca55d5fb6f`。v2 签名验证通过，证书 SHA-256 `36019414c7013c50ada50c0942d10e3589f2ec6fc2dddafc0719f4251a051bb9` 与 1.0.9 正式版相同。16 个打包资源与 `dist-mobile/` 和 Android 同步目录逐字节一致；Manifest 仅相机和内部 receiver 权限，无网络/麦克风/全盘存储权限。证据：`test-output/gendx-apk-build.log`、`gendx-apk-verification.json`、`gendx-signature.txt`、`gendx-apk-badging.txt`。
+- **设备验证范围**：本轮没有连接物理手机。现有 Android 模拟器安装的是旧 debug 包，不能用正式包直接覆盖；现有 `emulator-5554` 为 1.0.9 / 10 调试版，签名与正式版不兼容。构建同源码 debug 包并保留数据升级验证的工具请求被标记为“用户拒绝”，因此没有构建调试包、备份、安装或改动模拟器记录；本轮 Android 模拟器运行验证未完成。正式包已单独核对签名/版本/资源。构建通过和模拟相机测试均不等于真机摄像头、实际试管、OTG/U盘或第三方分享实测。iOS 未构建交付。
 
 ## 1.0.9 Android Studio 调试包刷新（2026-10-12）
 

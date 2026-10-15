@@ -1,7 +1,7 @@
 import { conclude, needsReview, type Inspection } from './inspection';
 import { lampDefinitions } from './device-vision';
 
-export type StandardExportFormat = 'csv' | 'fhir-json' | 'fhir-xml';
+export type StandardExportFormat = 'csv' | 'hl7-v2' | 'fhir-json' | 'fhir-xml';
 export type InspectionSummary = {
   total: number;
   completed: number;
@@ -43,6 +43,21 @@ const INDICATION_NOTE =
 const CSV_TEXT_NOTE =
   'CSV为表格交换格式，不是FHIR资源。条码/记录ID及可能被表格软件执行或改写的文本前置一个英文撇号作文本保护；程序导入这些字段时移除该保护前缀。FHIR保留原始字符串。';
 const definitions: Record<string, [string, string]> = {
+  'patient-age-at-entry': [
+    '录入年龄',
+    '拍摄前用户录入的整数年龄（岁），不推算出生日期。',
+  ],
+  'patient-contact': ['联系方式', '用户录入的联系方式原文。'],
+  'test-item': ['检测项目', '拍摄前用户选择的项目名称；不推断临床编码。'],
+  'specimen-barcode': [
+    '样本条码',
+    '照片自动解码的试管标识；旧记录可能包含人工录入条码。',
+  ],
+  'confirmed-at': [
+    '确认保存时间',
+    '用户确认并锁定照片记录的时间，不代表样本采集时间。',
+  ],
+  'locked-at': ['锁定时间', '检测信息成为只读记录的时间。'],
   'software-application': [
     '照片识别应用',
     '照片导入、灯态分析与导出软件；不表示实体检测仪或其序列号。',
@@ -295,7 +310,7 @@ function buildBundle(
     url: LOCAL_CODE_SYSTEM,
     version: '1',
     name: 'InspectionToolLocalCodes',
-    title: '检图本地设备灯态与使用统计代码',
+    title: 'GenDX_T 本地设备灯态与使用统计代码',
     status: 'active',
     experimental: false,
     description: `${INDICATION_NOTE} ${SCOPE} 本地词汇随包提供；接收方需做术语映射，不宣称符合特定地区HIE实施指南。`,
@@ -307,11 +322,13 @@ function buildBundle(
   });
   const software = add({
     resourceType: 'Device',
-    deviceName: [{ name: '检图照片灯态识别软件', type: 'user-friendly-name' }],
+    deviceName: [
+      { name: 'GenDX_T 照片灯态识别软件', type: 'user-friendly-name' },
+    ],
     type: coded('software-application'),
     note: [
       {
-        text: '软件资源用于标识照片处理工具；未采集实体检测仪序列号、患者身份、检验项目或样本类型，不推断这些信息。',
+        text: '软件资源用于标识照片处理工具；患者与项目来自逐次录入。未采集实体检测仪序列号、样本类型或采集时间，不推断这些信息。',
       },
     ],
   });
@@ -360,6 +377,20 @@ function buildBundle(
       elapsedMs,
       createdTimestamp,
     } = row;
+    const patient = record.patient
+      ? add({
+          resourceType: 'Patient',
+          identifier: [
+            {
+              system: 'urn:inspection-tool:identifier:patient',
+              value: record.patient.patientId,
+            },
+          ],
+          name: [{ text: record.patient.name }],
+          telecom: [{ system: 'other', value: record.patient.contact }],
+          gender: record.patient.gender,
+        })
+      : undefined;
     const specimen = record.barcode
       ? add({
           resourceType: 'Specimen',
@@ -369,8 +400,11 @@ function buildBundle(
               value: record.barcode,
             },
           ],
+          ...(patient ? { subject: patient } : {}),
           note: [
-            { text: '仅由试管条码关联；未记录患者身份、样本类型或采集时间。' },
+            {
+              text: '由试管条码关联；未记录样本类型或采集时间。患者信息仅在拍摄前已录入时提供。',
+            },
           ],
         })
       : undefined;
@@ -389,6 +423,24 @@ function buildBundle(
         coded(record.barcodeSource),
       ),
     ];
+    if (record.patient) {
+      components.push(
+        component('test-item', 'valueString', record.patient.testItem),
+      );
+      components.push(
+        component(
+          'patient-age-at-entry',
+          'valueQuantity',
+          quantity(Number(record.patient.age), 'a'),
+        ),
+      );
+    }
+    if (record.confirmedAt)
+      components.push(
+        component('confirmed-at', 'valueDateTime', record.confirmedAt),
+      );
+    if (record.lockedAt)
+      components.push(component('locked-at', 'valueDateTime', record.lockedAt));
     if (rawResult)
       components.push(component('raw-result', 'valueString', rawResult));
     if (record.name)
@@ -464,6 +516,7 @@ function buildBundle(
               ? 'registered'
               : 'preliminary',
       code: coded('device-indicator-assessment'),
+      ...(patient ? { subject: patient } : {}),
       issued: timestamp,
       ...(definite
         ? { valueCodeableConcept: coded(exportResult) }
@@ -572,6 +625,14 @@ function csv(
     'error',
     'warnings',
     'exported_at_utc',
+    'patient_name',
+    'patient_gender',
+    'patient_age_years',
+    'patient_id_text',
+    'patient_contact_text',
+    'test_item',
+    'confirmed_at_utc',
+    'locked_at_utc',
   ];
   type CsvValue = string | number | boolean | null | undefined;
   const table: CsvValue[][] = [];
@@ -627,6 +688,14 @@ function csv(
       error: r.error,
       warnings: r.device.warnings.join('\n'),
       exported_at_utc: timestamp,
+      patient_name: r.patient?.name,
+      patient_gender: r.patient?.gender,
+      patient_age_years: r.patient?.age,
+      patient_id_text: r.patient?.patientId ? `'${r.patient.patientId}` : '',
+      patient_contact_text: r.patient?.contact ? `'${r.patient.contact}` : '',
+      test_item: r.patient?.testItem,
+      confirmed_at_utc: r.confirmedAt,
+      locked_at_utc: r.lockedAt,
     });
   }
   function cell(value: CsvValue): string {
@@ -654,6 +723,185 @@ function csv(
   );
 }
 
+/** HL7 v2.5.1 ER7 escaping: user text can never inject a new segment/field. */
+function hl7Escape(value: string): string {
+  if (value === '""') return '\\X2222\\';
+  const separators: Record<string, string> = {
+    '|': '\\F\\',
+    '^': '\\S\\',
+    '~': '\\R\\',
+    '\\': '\\E\\',
+    '&': '\\T\\',
+  };
+  return Array.from(value, (character) => {
+    if (separators[character]) return separators[character];
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127
+      ? `\\X${code.toString(16).toUpperCase().padStart(2, '0')}\\`
+      : character;
+  }).join('');
+}
+function hl7Timestamp(value: string): string {
+  return new Date(value)
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace('T', '')
+    .replace('Z', '+0000');
+}
+function hl7Segment(
+  name: string,
+  fields: Record<number, string | undefined>,
+): string {
+  const values = Array.from(
+    { length: Math.max(0, ...Object.keys(fields).map(Number)) + 1 },
+    () => '',
+  );
+  values[0] = name;
+  for (const [position, value] of Object.entries(fields))
+    values[Number(position)] = value || '';
+  return values.join('|');
+}
+function hl7Batch(rows: Normalized[], timestamp: string): string {
+  const exportedAt = hl7Timestamp(timestamp);
+  const header = (name: 'FHS' | 'BHS') =>
+    [name, '^~\\&', 'GenDX_T', '', '', '', exportedAt].join('|');
+  const segments = [header('FHS'), header('BHS')];
+  for (const row of rows) {
+    const r = row.record;
+    const definite = ['positive', 'negative', 'invalid'].includes(
+      row.exportResult,
+    );
+    const status =
+      row.exportResult === 'processing-error' ? 'X' : definite ? 'F' : 'P';
+    const localCode = (code: string) =>
+      `${hl7Escape(code)}^${hl7Escape(definitions[code]?.[0] || code)}^L`;
+    // MSH-1 is the delimiter itself, so the array index is one less than its
+    // HL7 field number from MSH-2 onwards. All other segment arrays use the
+    // actual field number. No clinical collection/test timestamps are invented.
+    segments.push(
+      [
+        'MSH',
+        '^~\\&',
+        'GenDX_T',
+        '',
+        '',
+        '',
+        exportedAt,
+        '',
+        'ORU^R01^ORU_R01',
+        uuid().replace(/-/g, '').slice(0, 20),
+        'P',
+        '2.5.1',
+        '',
+        '',
+        'NE',
+        'NE',
+        '',
+        'UNICODE UTF-8',
+      ].join('|'),
+    );
+    if (r.patient) {
+      segments.push(
+        hl7Segment('PID', {
+          1: '1',
+          3: `${hl7Escape(r.patient.patientId)}^^^GenDX_T`,
+          5: hl7Escape(r.patient.name),
+          8: { male: 'M', female: 'F', other: 'O' }[r.patient.gender],
+        }),
+      );
+    }
+    segments.push(
+      hl7Segment('OBR', {
+        1: '1',
+        3: `${hl7Escape(r.id)}^GenDX_T`,
+        4: localCode(r.patient?.testItem || 'device-indicator-assessment'),
+        ...(r.confirmedAt ? { 22: hl7Timestamp(r.confirmedAt) } : {}),
+        25: definite ? 'F' : 'P',
+      }),
+    );
+    segments.push(
+      hl7Segment('NTE', {
+        1: '1',
+        3: hl7Escape(
+          `${INDICATION_NOTE} 本文件为离线交换批次，L 为应用本地编码，接收方需映射。年龄为录入年龄，不推算出生日期；联系方式保留原文。记录时间不代表检测或采样时间。`,
+        ),
+      }),
+    );
+    let nextObx = 0;
+    const obx = (
+      code: string,
+      value: string,
+      type = 'ST',
+      unit = '',
+      resultStatus = status,
+    ) => {
+      segments.push(
+        hl7Segment('OBX', {
+          1: String(++nextObx),
+          2: type,
+          3: localCode(code),
+          5: value,
+          ...(unit ? { 6: unit } : {}),
+          11: resultStatus,
+        }),
+      );
+    };
+    obx(
+      'device-indicator-assessment',
+      definite ? localCode(row.exportResult) : '',
+      'CE',
+    );
+    obx('export-result', localCode(row.exportResult), 'CE');
+    obx('processing-phase', localCode(r.phase), 'CE');
+    obx('reviewed', r.reviewed ? 'true' : 'false');
+    if (r.patient) {
+      obx(
+        'patient-age-at-entry',
+        String(Number(r.patient.age)),
+        'NM',
+        'a^year^UCUM',
+      );
+      obx('patient-contact', hl7Escape(r.patient.contact), 'TX');
+      obx('test-item', hl7Escape(r.patient.testItem));
+    }
+    if (r.barcode) obx('specimen-barcode', hl7Escape(r.barcode));
+    obx('barcode-source', localCode(r.barcodeSource), 'CE');
+    if (row.rawResult) obx('raw-result', hl7Escape(row.rawResult));
+    if (row.createdTimestamp)
+      obx('record-created-at', hl7Timestamp(row.createdTimestamp), 'TS');
+    if (r.createdAt) obx('record-created-at-original', hl7Escape(r.createdAt));
+    if (r.confirmedAt) obx('confirmed-at', hl7Timestamp(r.confirmedAt), 'TS');
+    if (r.lockedAt) obx('locked-at', hl7Timestamp(r.lockedAt), 'TS');
+    if (row.elapsedMs !== null)
+      obx(
+        'processing-duration',
+        String(row.elapsedMs),
+        'NM',
+        'ms^millisecond^UCUM',
+      );
+    for (const { key } of lampDefinitions) {
+      const state =
+        r.device.lamps.find((lamp) => lamp.key === key)?.state || 'missing';
+      obx(
+        `${key}-lamp`,
+        localCode(state === 'unknown' ? 'lamp-unknown' : state),
+        'CE',
+      );
+    }
+    if (r.error) obx('processing-error-detail', hl7Escape(r.error), 'TX');
+    const warnings = r.device.warnings.filter(Boolean);
+    if (warnings.length)
+      segments.push(
+        hl7Segment('NTE', { 1: '1', 3: warnings.map(hl7Escape).join('~') }),
+      );
+  }
+  segments.push(
+    hl7Segment('BTS', { 1: String(rows.length) }),
+    hl7Segment('FTS', { 1: '1' }),
+  );
+  return `${segments.join('\r')}\r`;
+}
+
 /** Produces an offline file; no network transmission or patient inference. */
 export function createStandardExport(
   records: Inspection[],
@@ -671,7 +919,14 @@ export function createStandardExport(
   const summary = summarizeInspections(records);
   const rows = records.map(normalized);
   const stamp = timestamp.replace(/[-:]/g, '').replace('.', '-');
-  const stem = `检图_${format}_${stamp}_${uuid().slice(0, 8)}`;
+  const stem = `GenDX_T_${format}_${stamp}_${uuid().slice(0, 8)}`;
+  if (format === 'hl7-v2')
+    return {
+      fileName: `${stem}.hl7`,
+      mimeType: 'application/hl7-v2',
+      content: hl7Batch(rows, timestamp),
+      summary,
+    };
   if (format === 'csv')
     return {
       fileName: `${stem}.csv`,

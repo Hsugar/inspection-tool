@@ -416,3 +416,120 @@ test('XML rejects unrepresentable control characters instead of producing a corr
     r.barcode,
   );
 });
+
+const enteredPatient = { name: '测试患者', gender: 'female', age: '35', patientId: '0000088', contact: '+86 00123456', testItem: 'Flu A' };
+test('patient and selected project survive FHIR, CSV and Excel without inferred birth date or clinical terminology', async () => {
+  const r = record('positive', { patient: enteredPatient, lockedAt: date.toISOString(), confirmedAt: date.toISOString() });
+  const b = bundle([r]);
+  const patient = resources(b, 'Patient')[0];
+  const o = observations(b)[0];
+  const specimen = resources(b, 'Specimen')[0];
+  assert.equal(patient.identifier[0].value, enteredPatient.patientId);
+  assert.deepEqual(patient.name, [{ text: enteredPatient.name }]);
+  assert.equal(patient.gender, 'female');
+  assert.equal(patient.telecom[0].value, enteredPatient.contact);
+  assert.equal(patient.birthDate, undefined);
+  assert.equal(specimen.subject.reference, o.subject.reference);
+  assert.ok(b.entry.some((entry) => entry.fullUrl === o.subject.reference && entry.resource === patient));
+  assert.equal(components(o)['test-item'].valueString, 'Flu A');
+  assert.equal(components(o)['patient-age-at-entry'].valueQuantity.value, 35);
+  assert.equal(components(o)['patient-age-at-entry'].valueQuantity.code, 'a');
+  assert.equal(components(o)['confirmed-at'].valueDateTime, date.toISOString());
+  assert.doesNotMatch(JSON.stringify(b), /loinc\.org|snomed\.info/);
+  assert.deepEqual(normalizeIds(xmlLeaves(output([r], 'fhir-xml').content)), normalizeIds(jsonLeaves(b)));
+  const csv = csvRows(output([r], 'csv').content).find((row) => row.row_type === 'inspection');
+  assert.equal(csv.patient_name, enteredPatient.name);
+  assert.equal(csv.patient_id_text, `'${enteredPatient.patientId}`);
+  assert.equal(csv.patient_contact_text, `'${enteredPatient.contact}`);
+  assert.equal(csv.test_item, enteredPatient.testItem);
+  const { createWorkbook } = require('../.test-build/export.js');
+  const workbook = await createWorkbook([r]);
+  const sheet = workbook.getWorksheet('检测汇总');
+  assert.equal(sheet.getCell('O2').value, enteredPatient.name);
+  assert.equal(sheet.getCell('R2').value, enteredPatient.patientId);
+  assert.equal(sheet.getCell('S2').value, enteredPatient.contact);
+  assert.equal(sheet.getCell('T2').value, enteredPatient.testItem);
+  assert.equal(sheet.getCell('R2').numFmt, '@');
+});
+
+function hl7Messages(content) {
+  const segments = content.split('\r').filter(Boolean).map((line) => line.split('|'));
+  const messages = [];
+  for (const segment of segments) {
+    if (segment[0] === 'MSH') messages.push([]);
+    if (messages.length && !['BTS', 'FTS'].includes(segment[0])) messages.at(-1).push(segment);
+  }
+  return { segments, messages };
+}
+function hl7Observations(message) {
+  return Object.fromEntries(message.filter((segment) => segment[0] === 'OBX').map((segment) => [segment[3].split('^')[0], segment]));
+}
+test('HL7 batch has independent ORU R01 2.5.1 messages, correct field positions, patient, project, specimen and timestamps', () => {
+  const r = record('negative', { patient: enteredPatient, lockedAt: date.toISOString(), confirmedAt: date.toISOString() });
+  const file = output([r, record('positive')], 'hl7-v2');
+  assert.equal(file.mimeType, 'application/hl7-v2');
+  assert.match(file.fileName, /^GenDX_T_.*\.hl7$/);
+  const { segments, messages } = hl7Messages(file.content);
+  assert.equal(segments[0][0], 'FHS');
+  assert.equal(segments[1][0], 'BHS');
+  assert.deepEqual(segments.at(-2), ['BTS', '2']);
+  assert.deepEqual(segments.at(-1), ['FTS', '1']);
+  assert.equal(messages.length, 2);
+  const msh = messages[0][0];
+  assert.equal(msh[8], 'ORU^R01^ORU_R01');
+  assert.equal(msh[11], '2.5.1');
+  assert.equal(msh[17], 'UNICODE UTF-8');
+  assert.notEqual(msh[9], messages[1][0][9]);
+  assert.ok(msh[9].length <= 20);
+  const pid = messages[0].find((segment) => segment[0] === 'PID');
+  assert.equal(pid[3], '0000088^^^GenDX_T');
+  assert.equal(pid[5], enteredPatient.name);
+  assert.equal(pid[7], '', 'age must not become an invented birth date');
+  assert.equal(pid[8], 'F');
+  const obr = messages[0].find((segment) => segment[0] === 'OBR');
+  assert.equal(obr[4], 'Flu A^Flu A^L');
+  assert.equal(obr[7], '', 'record creation must not become clinical observation time');
+  assert.equal(obr[22], '20261010040506.123+0000');
+  const obs = hl7Observations(messages[0]);
+  assert.equal(obs['device-indicator-assessment'][5], 'negative^阴性指示^L');
+  assert.equal(obs['device-indicator-assessment'][11], 'F');
+  assert.equal(obs['specimen-barcode'][5], r.barcode);
+  assert.equal(obs['patient-age-at-entry'][2], 'NM');
+  assert.equal(obs['patient-age-at-entry'][5], '35');
+  assert.equal(obs['record-created-at'][5], '20261010040506.123+0000');
+  assert.ok(!messages[1].some((segment) => segment[0] === 'PID'), 'legacy record does not inherit the other patient');
+});
+
+test('HL7 protects separators and segment boundaries; uncertain/failed records never export a definite main indication', () => {
+  const special = '|^~\\&\r\n';
+  const r = record('positive', { patient: { ...enteredPatient, name: special, contact: special }, barcode: special, reviewed: false });
+  const file = output([r, record('positive', { phase: 'error' }), record('positive', { phase: 'queued' })], 'hl7-v2');
+  const { messages } = hl7Messages(file.content);
+  assert.equal(messages.length, 3);
+  const escaped = '\\F\\\\S\\\\R\\\\E\\\\T\\\\X0D\\\\X0A\\';
+  assert.equal(messages[0].find((segment) => segment[0] === 'PID')[5], escaped);
+  assert.equal(hl7Observations(messages[0])['patient-contact'][5], escaped);
+  assert.equal(hl7Observations(messages[0])['specimen-barcode'][5], escaped);
+  for (const message of messages) {
+    const value = hl7Observations(message)['device-indicator-assessment'];
+    assert.equal(value[5], '');
+    assert.notEqual(value[11], 'F');
+  }
+  assert.equal(hl7Observations(messages[1])['device-indicator-assessment'][11], 'X');
+  assert.equal(hl7Observations(messages[1])['raw-result'], undefined);
+  assert.equal(file.content.includes('\n'), false);
+});
+
+test('HL7 Power state only changes its display OBX, never the indication/status', () => {
+  const list = ['on', 'off', 'unknown', 'missing'].map((state) => {
+    const r = record('negative');
+    r.device.lamps = r.device.lamps.filter((lamp) => state !== 'missing' || lamp.key !== 'power')
+      .map((lamp) => lamp.key === 'power' ? { ...lamp, state } : lamp);
+    return r;
+  });
+  const { messages } = hl7Messages(output(list, 'hl7-v2').content);
+  const observations = messages.map(hl7Observations);
+  assert.equal(new Set(observations.map((obs) => obs['device-indicator-assessment'].join('|'))).size, 1);
+  assert.equal(new Set(observations.map((obs) => obs['export-result'].join('|'))).size, 1);
+  assert.deepEqual(observations.map((obs) => obs['power-lamp'][5].split('^')[0]), ['on', 'off', 'lamp-unknown', 'missing']);
+});

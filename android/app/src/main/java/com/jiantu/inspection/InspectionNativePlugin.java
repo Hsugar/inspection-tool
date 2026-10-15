@@ -26,6 +26,7 @@ import java.util.*;
 public class InspectionNativePlugin extends Plugin {
     private BroadcastReceiver shareReceiver;
     private PendingIntent shareCallback;
+    private final Set<String> activeRecordIds = new HashSet<>();
 
     private File recordDir() throws IOException {
         File directory = new File(getContext().getFilesDir(), "inspections");
@@ -46,20 +47,58 @@ public class InspectionNativePlugin extends Plugin {
             atomic.finishWrite(stream);
         } catch (IOException error) { atomic.failWrite(stream); throw error; }
     }
-    @PluginMethod public void putRecord(PluginCall call) {
+    private Map<String, Object> metadata(JSObject object) throws org.json.JSONException {
+        Map<String, Object> result = new HashMap<>();
+        Iterator<String> keys = object.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            result.put(key, metadataValue(object.get(key)));
+        }
+        return result;
+    }
+    private Object metadataValue(Object value) throws org.json.JSONException {
+        if (value == org.json.JSONObject.NULL) return null;
+        if (value instanceof org.json.JSONObject) return metadata(new JSObject(value.toString()));
+        if (value instanceof org.json.JSONArray) {
+            List<Object> result = new ArrayList<>();
+            org.json.JSONArray array = (org.json.JSONArray) value;
+            for (int index = 0; index < array.length(); index++) result.add(metadataValue(array.get(index)));
+            return result;
+        }
+        return value;
+    }
+    @PluginMethod public synchronized void putRecord(PluginCall call) {
         try {
             String id = id(call);
             File directory = recordDir();
-            String original = call.getString("imageBase64");
-            if (original != null) atomicWrite(new File(directory, id + ".image"), Base64.decode(original, Base64.DEFAULT));
-            if (!new File(directory, id + ".image").isFile()) throw new IOException("原始照片未保存");
+            File recordFile = new File(directory, id + ".json");
+            File imageFile = new File(directory, id + ".image");
             String json = call.getString("json", "");
-            new JSObject(json); // Reject invalid metadata before replacing a valid record.
-            atomicWrite(new File(directory, id + ".json"), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            Map<String, Object> next = metadata(new JSObject(json));
+            Map<String, Object> previous = null;
+            if (recordFile.isFile() || new File(recordFile.getPath() + ".bak").isFile()) {
+                previous = metadata(new JSObject(new String(new AtomicFile(recordFile).readFully(), java.nio.charset.StandardCharsets.UTF_8)));
+            }
+            RecordWritePolicy.validate(id, previous, next, activeRecordIds.contains(id));
+            String original = call.getString("imageBase64");
+            if (original != null) {
+                byte[] bytes = Base64.decode(original, Base64.DEFAULT);
+                if (imageFile.isFile()) {
+                    if (!Arrays.equals(new AtomicFile(imageFile).readFully(), bytes))
+                        throw new IOException("原始照片不可替换，请重新录入开始新检测");
+                } else {
+                    if (previous != null) throw new IOException("原始照片缺失，原记录已保留");
+                    atomicWrite(imageFile, bytes);
+                }
+            }
+            if (!imageFile.isFile()) throw new IOException("原始照片未保存");
+            atomicWrite(recordFile, json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            if (previous == null) activeRecordIds.add(id);
+            if (next.containsKey("lockedAt")) activeRecordIds.remove(id);
             call.resolve();
-        } catch (Exception error) { call.reject("本地保存失败，请检查剩余空间：" + error.getMessage(), error); }
+        } catch (Exception error) { call.reject("本地保存失败：" + error.getMessage(), error); }
     }
-    @PluginMethod public void listRecords(PluginCall call) {
+    @PluginMethod public synchronized void listRecords(PluginCall call) {
         try {
             File directory = recordDir();
             File[] files = directory.listFiles((dir, name) -> name.endsWith(".json"));
@@ -70,6 +109,7 @@ public class InspectionNativePlugin extends Plugin {
                 for (File file : files) {
                     try {
                         String id = file.getName().replaceFirst("\\.json$", "");
+                        activeRecordIds.remove(id);
                         File image = new File(directory, id + ".image");
                         if (!image.isFile()) throw new IOException("照片缺失");
                         String json = new String(new AtomicFile(file).readFully(), java.nio.charset.StandardCharsets.UTF_8);
@@ -82,22 +122,15 @@ public class InspectionNativePlugin extends Plugin {
         } catch (Exception error) { call.reject("读取本地记录失败", error); }
     }
     @PluginMethod public void deleteRecord(PluginCall call) {
-        try {
-            String id = id(call);
-            File directory = recordDir();
-            File json = new File(directory, id + ".json");
-            if (json.exists() && !json.delete()) throw new IOException("无法删除记录");
-            new AtomicFile(json).delete();
-            new AtomicFile(new File(directory, id + ".image")).delete();
-            call.resolve();
-        } catch (Exception error) { call.reject("删除失败", error); }
+        call.reject(RecordWritePolicy.READ_ONLY);
     }
     @PluginMethod public void pickPhotos(PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("image/*");
         intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/jpeg", "image/png", "image/webp"});
-        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        boolean multiple = call.getBoolean("multiple", true);
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
         try { startActivityForResult(call, intent, "photosSelected"); }
         catch (Exception error) { call.reject("无法打开系统照片选择器", error); }
     }
@@ -157,6 +190,8 @@ public class InspectionNativePlugin extends Plugin {
             if (data.getClipData() != null) {
                 for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
             } else if (data.getData() != null) uris.add(data.getData());
+            if (!call.getBoolean("multiple", true) && uris.size() > 1)
+                throw new IOException("每次只能选择一张照片，请重新选择");
             if (uris.size() > 30) throw new IOException("一次最多选择 30 张照片");
             File directory = new File(getContext().getCacheDir(), "imports");
             if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("无法暂存照片");
@@ -166,7 +201,7 @@ public class InspectionNativePlugin extends Plugin {
                 try (Cursor cursor = getContext().getContentResolver().query(uri, null, null, null, null)) {
                     if (cursor != null && cursor.moveToFirst()) {
                         int column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                        if (column >= 0) name = cursor.getString(column);
+                        if (column >= 0 && !cursor.isNull(column)) name = cursor.getString(column);
                     }
                 }
                 String type = getContext().getContentResolver().getType(uri);
@@ -179,6 +214,7 @@ public class InspectionNativePlugin extends Plugin {
                         if (total > 20 * 1024 * 1024) throw new IOException(name + " 超过 20 MB");
                         out.write(buffer, 0, count);
                     }
+                    if (total == 0) throw new IOException("所选照片为空，请重新选择");
                 }
                 photos.put(new JSObject().put("path", Uri.fromFile(copy).toString()).put("name", name).put("type", type == null ? "image/jpeg" : type));
             }
@@ -214,7 +250,7 @@ public class InspectionNativePlugin extends Plugin {
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType(exportMimeType(call));
-            intent.putExtra(Intent.EXTRA_TITLE, call.getString("name", "检图导出"));
+            intent.putExtra(Intent.EXTRA_TITLE, call.getString("name", "GenDX_T导出"));
             startActivityForResult(call, intent, "excelLocationSelected");
         } catch (Exception error) { call.reject("无法打开系统保存对话框", error); }
     }
@@ -243,9 +279,9 @@ public class InspectionNativePlugin extends Plugin {
                 Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", source);
                 Intent send = new Intent(Intent.ACTION_SEND);
                 send.setType(mimeType);
-                send.putExtra(Intent.EXTRA_SUBJECT, "检图检测记录");
+                send.putExtra(Intent.EXTRA_SUBJECT, "GenDX_T检测记录");
                 send.putExtra(Intent.EXTRA_STREAM, uri);
-                send.setClipData(new ClipData(call.getString("name", "检图导出"), new String[]{mimeType}, new ClipData.Item(uri)));
+                send.setClipData(new ClipData(call.getString("name", "GenDX_T导出"), new String[]{mimeType}, new ClipData.Item(uri)));
                 send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
                 // A private per-share callback distinguishes choosing a target from dismissing

@@ -380,7 +380,7 @@ test('Excel treats unlit, unknown and absent Power as display data without warni
   assert.equal(sheet.getCell('J1').value, 'Power（电源，仅展示）');
   for (let row = 2; row <= 5; row++) {
     assert.equal(sheet.getCell(`F${row}`).value, '阳性指示（+ Positive）');
-    assert.equal(sheet.getCell(`K${row}`).value, '已校对');
+    assert.equal(sheet.getCell(`K${row}`).value, '已确认');
     assert.equal(sheet.getCell(`N${row}`).value, '');
   }
   assert.equal(sheet.getCell('J4').value, '未识别');
@@ -420,8 +420,10 @@ test('real sample Excel round trip preserves barcode, all lamp columns, uncertai
   assert.equal(sheet.getCell('D2').value, '01202609030006');
   assert.equal(sheet.getCell('D3').value, '01202609030005');
   assert.equal(sheet.getCell('D2').type, ExcelJS.ValueType.String);
-  assert.equal(sheet.getCell('F2').value, '无效指示（Invalid）');
-  assert.equal(sheet.getCell('F3').value, '阳性指示（+ Positive）');
+  assert.equal(sheet.getCell('F2').value, '待确认');
+  assert.equal(sheet.getCell('F3').value, '待确认');
+  assert.equal(sheet.getCell('W2').value, '无效指示（Invalid）');
+  assert.equal(sheet.getCell('W3').value, '阳性指示（+ Positive）');
   assert.match(sheet.getCell('I2').value, /亮起/);
   assert.equal(sheet.getCell('J3').value, '未见亮起');
   assert.equal(sheet.getCell('N3').value, '');

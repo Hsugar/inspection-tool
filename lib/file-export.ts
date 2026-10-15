@@ -14,6 +14,11 @@ export const exportFormats: {
   description: string;
 }[] = [
   {
+    value: 'hl7-v2',
+    label: 'HL7 v2',
+    description: 'HL7 v2.5.1 ORU R01 · 离线消息文件',
+  },
+  {
     value: 'fhir-xml',
     label: 'FHIR XML',
     description: 'HL7 FHIR R4 · 用于医疗信息系统交换',
@@ -50,7 +55,7 @@ export async function exportInspectionFile(
     format === 'xlsx' ? null : createStandardExport(records, format);
   const name =
     standard?.fileName ||
-    `检图_${new Date().toISOString().replace(/[:.]/g, '-')}.xlsx`;
+    `GenDX_T_${new Date().toISOString().replace(/[:.]/g, '-')}.xlsx`;
   const mimeType =
     standard?.mimeType.split(';')[0] ||
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';

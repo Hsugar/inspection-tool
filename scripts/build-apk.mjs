@@ -4,11 +4,10 @@ import {
   copyFileSync,
   writeFileSync,
   readFileSync,
-  chmodSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { randomBytes, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 const mode = process.argv[2] || 'debug';
 if (!['debug', 'release'].includes(mode))
   throw new Error('Use debug or release');
@@ -45,38 +44,9 @@ if (mode === 'release') {
   mkdirSync(signing, { recursive: true, mode: 0o700 });
   const key = resolve(signing, 'jiantu.jks');
   const properties = resolve(signing, 'keystore.properties');
-  if (!existsSync(key) && !existsSync(properties)) {
-    const password = randomBytes(32).toString('hex');
-    const passwordFile = resolve(signing, 'password');
-    writeFileSync(passwordFile, password, { mode: 0o600 });
-    run(`${java}/bin/keytool`, [
-      '-genkeypair',
-      '-keystore',
-      key,
-      '-alias',
-      'jiantu',
-      '-keyalg',
-      'RSA',
-      '-keysize',
-      '3072',
-      '-validity',
-      '10000',
-      '-dname',
-      'CN=JianTu Local, O=JianTu, C=CN',
-      '-storepass:file',
-      passwordFile,
-      '-keypass:file',
-      passwordFile,
-    ]);
-    writeFileSync(
-      properties,
-      `storeFile=${key}\nstorePassword=${password}\nkeyAlias=jiantu\nkeyPassword=${password}\n`,
-      { mode: 0o600 },
-    );
-    chmodSync(key, 0o600);
-  } else if (!existsSync(key) || !existsSync(properties))
+  if (!existsSync(key) || !existsSync(properties))
     throw new Error(
-      'Signing files incomplete. Restore signing backup before rebuilding.',
+      'Existing release signing files are required. Restore the signing backup; never generate a replacement key.',
     );
 }
 run(
@@ -92,10 +62,13 @@ run(
   },
 );
 mkdirSync(resolve(root, 'releases'), { recursive: true });
-const version = readFileSync(resolve(root, 'android/app/build.gradle'), 'utf8')
-  .match(/versionName\s+"([0-9]+\.[0-9]+\.[0-9]+)"/)?.[1];
-if (!version) throw new Error('Android versionName must be a numeric x.y.z version');
-const target = resolve(root, 'releases', `jiantu-${version}-${mode}.apk`);
+const version = readFileSync(
+  resolve(root, 'android/app/build.gradle'),
+  'utf8',
+).match(/versionName\s+"([0-9]+\.[0-9]+\.[0-9]+)"/)?.[1];
+if (!version)
+  throw new Error('Android versionName must be a numeric x.y.z version');
+const target = resolve(root, 'releases', `GenDX_T-${version}-${mode}.apk`);
 copyFileSync(
   resolve(root, 'android/app/build/outputs/apk', mode, `app-${mode}.apk`),
   target,

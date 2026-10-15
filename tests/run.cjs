@@ -25,6 +25,7 @@ const args = [
   'lib/standard-export.ts',
   'lib/camera-layout.ts',
   'lib/record-store.ts',
+  'lib/photo-input.ts',
 ];
 let result = spawnSync(process.execPath, args, { stdio: 'inherit' });
 if (result.status !== 0) process.exit(result.status || 1);
@@ -38,8 +39,10 @@ result = spawnSync(
     'tests/record-store.test.cjs',
     'tests/file-export.test.cjs',
     'tests/mobile-export.test.cjs',
+    'tests/native.test.cjs',
     'tests/standard-export.test.cjs',
     'tests/camera-layout.test.cjs',
+    'tests/photo-input.test.cjs',
   ],
   {
     stdio: 'inherit',

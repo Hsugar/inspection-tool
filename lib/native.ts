@@ -5,8 +5,12 @@ export interface NativeRecord {
   json: string;
   imageUri: string;
 }
+export interface PhotoPickerOptions {
+  /** Omit to preserve the existing multi-photo picker behavior. */
+  multiple?: boolean;
+}
 export const InspectionNative = registerPlugin<{
-  pickPhotos(): Promise<{
+  pickPhotos(options?: PhotoPickerOptions): Promise<{
     photos: { path: string; name: string; type: string }[];
   }>;
   takePhoto(): Promise<{
@@ -35,8 +39,10 @@ export const InspectionNative = registerPlugin<{
     mimeType: string;
   }): Promise<{ cancelled: boolean }>;
 }>('InspectionNative');
-export async function pickAndroidPhotos(): Promise<File[]> {
-  const { photos } = await InspectionNative.pickPhotos();
+export async function pickAndroidPhotos(
+  options?: PhotoPickerOptions,
+): Promise<File[]> {
+  const { photos } = await InspectionNative.pickPhotos(options);
   return readNativePhotos(photos);
 }
 export async function takeAndroidPhoto(): Promise<File[]> {
@@ -55,15 +61,24 @@ async function readNativePhotos(
         new File([await response.blob()], photo.name, { type: photo.type }),
       );
     }
-    return files;
-  } finally {
-    await InspectionNative.clearImports();
+  } catch (error) {
+    // Preserve the actionable read error if temporary-file cleanup also fails.
+    await InspectionNative.clearImports().catch(() => undefined);
+    throw error;
   }
+  await InspectionNative.clearImports();
+  return files;
 }
 export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('文件读取失败'));
+        return;
+      }
+      resolve(reader.result.split(',')[1]);
+    };
     reader.onerror = () => reject(new Error('文件读取失败'));
     reader.readAsDataURL(blob);
   });

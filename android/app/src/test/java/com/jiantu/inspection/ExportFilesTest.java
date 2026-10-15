@@ -56,11 +56,15 @@ public class ExportFilesTest {
     @Test public void fhirTypesAreSpecificToGeneratedExportNames() {
         assertEquals("application/fhir+json", ExportFiles.fhirMimeType("检图_fhir-json_20261010_12345678.json"));
         assertEquals("application/fhir+xml", ExportFiles.fhirMimeType("检图_fhir-xml_20261010_12345678.xml"));
+        assertEquals("application/fhir+json", ExportFiles.fhirMimeType("GenDX_T_fhir-json_20261013_12345678.json"));
+        assertEquals("application/fhir+xml", ExportFiles.fhirMimeType("GenDX_T_fhir-xml_20261013_12345678.xml"));
+        assertEquals("application/hl7-v2", ExportFiles.fhirMimeType("GenDX_T_hl7-v2_20261013_12345678.hl7"));
         assertNull(ExportFiles.fhirMimeType("record.json"));
         assertNull(ExportFiles.fhirMimeType("record.xml"));
         assertNull(ExportFiles.fhirMimeType("检图_fhir-json_20261010_12345678.xlsx"));
         assertNull(ExportFiles.fhirMimeType(null));
         assertTrue(ExportFiles.supportsMimeType("text/csv"));
+        assertTrue(ExportFiles.supportsMimeType("application/hl7-v2"));
         assertTrue(ExportFiles.supportsMimeType("application/fhir+xml"));
         assertTrue(ExportFiles.supportsMimeType("application/fhir+json"));
         assertTrue(ExportFiles.supportsMimeType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
